@@ -1,200 +1,188 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebAR Camera 1080x1920</title>
-
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Snapgram HD</title>
+<link rel="icon" href="data:,">
 <style>
-    body, html {
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background: #000;
-        font-family: Arial, sans-serif;
-    }
-
-    #preview {
-        position: fixed;
-        top: 0; left: 0;
-        width: 100vw;
-        height: 100vh;
-        object-fit: cover;
-    }
-
-    #captureBtn {
-        position: fixed;
-        bottom: 30px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        background: white;
-        border: 5px solid rgba(255,255,255,0.5);
-        box-shadow: 0 0 10px black;
-        cursor: pointer;
-    }
-
-    #overlayFrame {
-        position: fixed;
-        top: 0; left: 0;
-        width: 100vw;
-        height: 100vh;
-        object-fit: contain;
-        pointer-events: none;
-    }
+  html,body{height:100%;margin:0;background:#000;font-family:Arial}
+  #preview { position:fixed; inset:0; width:100vw; height:100vh; display:block; background:#000; z-index:1; }
+  video#sourceVideo { position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; opacity:0; }
+  #captureBtn{
+    position:fixed; bottom:26px; left:50%; transform:translateX(-50%);
+    width:84px; height:84px; border-radius:50%;
+    background:#fff; border:6px solid rgba(255,255,255,0.7); z-index:50;
+  }
+  #flipBtn{
+    position:fixed; top:20px; right:20px;
+    padding:8px 14px; color:#fff; background:rgba(0,0,0,0.5);
+    border-radius:20px; border:1px solid rgba(255,255,255,0.3); z-index:50;
+  }
 </style>
-
 </head>
 <body>
 
-<video id="preview" autoplay playsinline muted></video>
-<img id="overlayFrame" src="frame.png">
-<div id="captureBtn"></div>
+<video id="sourceVideo" autoplay playsinline muted></video>
+<canvas id="preview"></canvas>
+<img id="frameImg" src="frame.png" style="display:none">
 
-<canvas id="canvas" width="1080" height="1920" style="display:none;"></canvas>
-
-<!-- FFmpeg lite (paling stabil & kecil) -->
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.2/dist/umd/ffmpeg-lite.min.js"></script>
+<button id="captureBtn"></button>
+<button id="flipBtn">Flip</button>
 
 <script>
-// ============================
-// CEK FFmpeg
-// ============================
-if (typeof FFmpeg === "undefined") {
-    alert("FFmpeg gagal dimuat! Periksa koneksi atau refresh halaman.");
+const OUT_W = 1080, OUT_H = 1920;
+
+const sourceVideo = document.getElementById("sourceVideo");
+const preview = document.getElementById("preview");
+const frameImg = document.getElementById("frameImg");
+
+const pctx = preview.getContext("2d");
+
+function fitPreview() {
+  preview.width = window.innerWidth;
+  preview.height = window.innerHeight;
 }
+fitPreview();
+window.addEventListener("resize", fitPreview);
 
-// Import
-const { createFFmpeg, fetchFile } = FFmpeg;
-const ffmpeg = createFFmpeg({ log: false });
+let usingFront = false;
+let stream = null;
+let micStream = null;
+let mediaRecorder = null;
+let recordedChunks = [];
+let holding = false;
+let pressTimer = null;
 
-// ============================
-// START CAMERA
-// ============================
-const video = document.getElementById("preview");
+// CANVAS KHUSUS OUTPUT 1080x1920
+const procCanvas = document.createElement("canvas");
+procCanvas.width = OUT_W;
+procCanvas.height = OUT_H;
+const procCtx = procCanvas.getContext("2d");
 
+// Start kamera
 async function startCamera() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 1080 },
-                height: { ideal: 1920 },
-                facingMode: "user"
-            },
-            audio: false
-        });
-        video.srcObject = stream;
-    } catch (err) {
-        alert("Kamera tidak bisa dibuka: " + err);
-    }
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: usingFront ? "user" : "environment",
+      width: { ideal: 4000 },
+      height: { ideal: 4000 }
+    },
+    audio: false
+  });
+
+  sourceVideo.srcObject = stream;
+  await sourceVideo.play();
+  requestAnimationFrame(previewLoop);
 }
+
+function previewLoop() {
+  drawToCanvas();
+  requestAnimationFrame(previewLoop);
+}
+
+function drawToCanvas() {
+  let vW = sourceVideo.videoWidth;
+  let vH = sourceVideo.videoHeight;
+
+  if (!vW || !vH) return;
+
+  let ratioVideo = vW / vH;
+  let ratioTarget = OUT_W / OUT_H;
+
+  let sx = 0, sy = 0, sw = vW, sh = vH;
+
+  if (ratioVideo > ratioTarget) {
+    sw = vH * ratioTarget;
+    sx = (vW - sw) / 2;
+  } else {
+    sh = vW / ratioTarget;
+    sy = (vH - sh) / 2;
+  }
+
+  procCtx.drawImage(sourceVideo, sx, sy, sw, sh, 0, 0, OUT_W, OUT_H);
+  procCtx.drawImage(frameImg, 0, 0, OUT_W, OUT_H);
+
+  // tampil ke layar
+  pctx.drawImage(procCanvas, 0, 0, preview.width, preview.height);
+}
+
+// FOTO
+function takePhoto() {
+  drawToCanvas();
+  let url = procCanvas.toDataURL("image/jpeg", 0.92);
+  download(url, "photo_hd_1080x1920.jpg");
+}
+
+// VIDEO TANPA FFMPEG → OUTPUT .MP4
+async function startRecording() {
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+  const canvasStream = procCanvas.captureStream(30);
+  const finalStream = new MediaStream([
+    ...canvasStream.getVideoTracks(),
+    ...micStream.getAudioTracks()
+  ]);
+
+  mediaRecorder = new MediaRecorder(finalStream, {
+    mimeType: "video/webm;codecs=vp8,opus"
+  });
+
+  recordedChunks = [];
+  mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
+
+  mediaRecorder.start();
+}
+
+function stopRecording() {
+  mediaRecorder.stop();
+
+  setTimeout(() => {
+    const blob = new Blob(recordedChunks, { type: "video/webm" });
+
+    // rename menjadi MP4
+    const renamedBlob = new Blob([blob], { type: "video/mp4" });
+    const url = URL.createObjectURL(renamedBlob);
+
+    download(url, "video_hd_1080x1920.mp4");
+
+    micStream.getTracks().forEach(t => t.stop());
+  }, 300);
+}
+
+function download(url, name) {
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+}
+
+// Button Logic
+const captureBtn = document.getElementById("captureBtn");
+
+captureBtn.addEventListener("mousedown", () => {
+  pressTimer = setTimeout(() => {
+    holding = true;
+    startRecording();
+  }, 350);
+});
+
+captureBtn.addEventListener("mouseup", () => {
+  clearTimeout(pressTimer);
+  if (holding) stopRecording();
+  else takePhoto();
+  holding = false;
+});
+
+// Flip Kamera
+document.getElementById("flipBtn").onclick = () => {
+  usingFront = !usingFront;
+  startCamera();
+};
 
 startCamera();
-
-// ============================
-// FOTO (click sekali)
-// VIDEO (tahan 0.5 detik)
-// ============================
-const btn = document.getElementById("captureBtn");
-let holding = false;
-let recordTimeout;
-let mediaRecorder;
-let chunks = [];
-let stream;
-
-// ============================
-// FOTO
-// ============================
-function takePhoto() {
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-
-    // gambar video
-    ctx.drawImage(video, 0, 0, 1080, 1920);
-
-    // gambar frame
-    const frame = document.getElementById("overlayFrame");
-    ctx.drawImage(frame, 0, 0, 1080, 1920);
-
-    canvas.toBlob(function(blob) {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "photo_1080x1920.png";
-        a.click();
-    });
-}
-
-// ============================
-// MULAI REKAM (webm)
-// ============================
-function startRecording() {
-    stream = video.srcObject;
-    mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "video/webm;codecs=vp9"
-    });
-
-    mediaRecorder.ondataavailable = e => chunks.push(e.data);
-    mediaRecorder.onstop = convertToMp4;
-
-    chunks = [];
-    mediaRecorder.start();
-}
-
-// ============================
-// STOP REKAM → convert ke MP4
-// ============================
-async function convertToMp4() {
-    const webmBlob = new Blob(chunks, { type: "video/webm" });
-    const webmFile = await fetchFile(webmBlob);
-
-    if (!ffmpeg.isLoaded()) await ffmpeg.load();
-
-    ffmpeg.FS("writeFile", "input.webm", webmFile);
-
-    await ffmpeg.run(
-        "-i", "input.webm",
-        "-vf", "scale=1080:1920",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "20",
-        "output.mp4"
-    );
-
-    const data = ffmpeg.FS("readFile", "output.mp4");
-
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
-    a.download = "video_1080x1920.mp4";
-    a.click();
-}
-
-// ============================
-// BUTTON BEHAVIOR
-// ============================
-btn.addEventListener("mousedown", () => {
-    holding = true;
-
-    recordTimeout = setTimeout(() => {
-        if (holding) startRecording();
-    }, 450);
-});
-
-btn.addEventListener("mouseup", () => {
-    if (holding) {
-        clearTimeout(recordTimeout);
-
-        // klik cepat → foto
-        if (mediaRecorder == null || mediaRecorder.state !== "recording") {
-            takePhoto();
-        } else {
-            mediaRecorder.stop();
-        }
-
-        holding = false;
-    }
-});
-
 </script>
+
 </body>
 </html>
