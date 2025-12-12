@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>SnapCam Mobile</title>
+<title>SnapCam Mobile Fix</title>
 
 <style>
   body, html {
@@ -12,13 +12,6 @@
     background: #000;
     overflow: hidden;
     font-family: Arial, sans-serif;
-  }
-
-  #app {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    background: #000;
   }
 
   #preview {
@@ -35,27 +28,83 @@
     top: 0; left: 0;
     width: 100%; height: 100%;
     pointer-events: none;
-    background-size: cover;      /* atau contain sesuai desain */
+    background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
     z-index: 2;
   }
 
+  /* Tombol switch kamera */
+  #switchBtn {
+    position: fixed;
+    top: 30px;
+    right: 20px;
+    z-index: 3;
+    background: rgba(0,0,0,0.4);
+    color: #fff;
+    border: none;
+    border-radius: 20px;
+    padding: 6px 10px;
+    font-size: 18px;
+  }
+
+  /* Tombol capture + animasi */
   #captureBtn {
     position: fixed;
     bottom: 40px;
     left: 50%;
     transform: translateX(-50%);
-    width: 85px; height: 85px;
+    width: 85px;
+    height: 85px;
     border-radius: 50%;
-    background: white;
-    border: 4px solid #ddd;
+    background: transparent;
+    border: 4px solid rgba(255,255,255,0.4);
     box-shadow: 0 0 5px #000;
     z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  #captureBtn .ring {
+    width: 70px;
+    height: 70px;
+    border-radius: 50%;
+    background: white;
+    position: relative;
+    overflow: hidden;
   }
 
   #captureBtn:active {
     transform: translateX(-50%) scale(0.9);
+  }
+
+  /* garis progres berputar saat rekam */
+  #captureBtn.recording .ring::before {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 4px solid transparent;
+    border-top-color: #ff0044;
+    border-right-color: #ff0044;
+    animation: spin 1s linear infinite;
+  }
+
+  /* Timer rekam */
+  #recordTimer {
+    position: fixed;
+    top: 30px;
+    left: 20px;
+    z-index: 3;
+    color: #fff;
+    font-size: 16px;
+    background: rgba(0,0,0,0.4);
+    padding: 4px 8px;
+    border-radius: 6px;
+    min-width: 60px;
+    text-align: center;
   }
 
   /* Fallback input (kamera bawaan HP) */
@@ -77,40 +126,53 @@
     border-radius: 6px;
     max-width: 90%;
   }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
 </style>
 </head>
 
 <body>
-<div id="app">
-  <video id="preview" autoplay playsinline></video>
-  <div id="frame"></div>
 
-  <button id="captureBtn"></button>
+<video id="preview" autoplay playsinline></video>
+<div id="frame"></div>
 
-  <!-- Fallback ke kamera bawaan jika MediaRecorder/getUserMedia tidak jalan -->
-  <input id="fallbackInput"
-         type="file"
-         accept="image/*,video/*"
-         capture="environment">
+<button id="switchBtn">🔄</button>
 
-  <div id="fallbackNotice"></div>
-</div>
+<button id="captureBtn">
+  <span class="ring"></span>
+</button>
+
+<span id="recordTimer"></span>
+
+<input id="fallbackInput"
+       type="file"
+       accept="image/*,video/*"
+       capture="environment">
+
+<div id="fallbackNotice"></div>
 
 <script>
 const preview       = document.getElementById("preview");
 const frame         = document.getElementById("frame");
 const captureBtn    = document.getElementById("captureBtn");
+const switchBtn     = document.getElementById("switchBtn");
 const fallbackInput = document.getElementById("fallbackInput");
 const fallbackNote  = document.getElementById("fallbackNotice");
+const timerLabel    = document.getElementById("recordTimer");
 
 let mediaStream;
 let mediaRecorder;
 let chunks = [];
 let isRecording = false;
 let pressTimer;
+let currentFacing = "user";
+let recordInterval = null;
+const MAX_DURATION = 15; // detik
 
-// SET FRAME (PASTIKAN path & nama file benar)
-frame.style.backgroundImage = "url('frame.png')";  // ganti sesuai lokasi file
+// SET FRAME (pastikan file ada)
+frame.style.backgroundImage = "url('frame.png')";
 
 // =============================
 // FEATURE DETECTION
@@ -124,68 +186,72 @@ function hasMediaRecorder() {
 }
 
 // =============================
-// MULAI KAMERA (JIKA DIDUKUNG)
+// MULAI KAMERA
 // =============================
 async function startCamera() {
   if (!hasGetUserMedia()) {
-    enableFallback("Browser tidak mendukung kamera lewat web. Pakai kamera HP langsung.");
+    enableFallback("Browser tidak mendukung kamera lewat web.");
     return;
+  }
+
+  // stop stream lama jika ada
+  if (mediaStream) {
+    mediaStream.getTracks().forEach(t => t.stop());
+    mediaStream = null;
   }
 
   const constraints = {
     video: {
-      facingMode: "user",          // atau "environment" untuk kamera belakang
+      facingMode: currentFacing, // "user" atau "environment"
       width:  { ideal: 1080 },
       height: { ideal: 1920 },
       frameRate: { ideal: 30, max: 30 }
     },
     audio: true
-  }; // browser boleh menurunkan kualitas jika tidak sanggup. [web:81][web:94]
+  };
 
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
     preview.srcObject = mediaStream;
   } catch (err) {
     console.error("getUserMedia error:", err);
-    enableFallback("Gagal akses kamera/mikrofon. Pakai kamera HP langsung.");
+    enableFallback("Gagal akses kamera/mikrofon. Pakai kamera HP.");
   }
 
-  // Jika tidak ada MediaRecorder, tetap pakai fallback untuk rekam video
   if (!hasMediaRecorder()) {
-    enableFallback("Browser tidak mendukung rekam video langsung. Pakai kamera HP.");
+    enableFallback("Browser tidak mendukung rekam video langsung.");
   }
 }
 
+// switch kamera depan/belakang
+switchBtn.addEventListener("click", () => {
+  currentFacing = currentFacing === "user" ? "environment" : "user";
+  startCamera();
+});
+
 // =============================
-// FALLBACK: INPUT CAPTURE KAMERA HP
+// FALLBACK KAMERA HP
 // =============================
 function enableFallback(message) {
   fallbackInput.style.display = "block";
-  fallbackNote.textContent = message || "Gunakan tombol kamera HP untuk foto/video.";
+  fallbackNote.textContent = message || "Gunakan kamera HP untuk foto/video.";
 
-  // Kalau user tekan tombol, langsung buka kamera bawaan
   captureBtn.onclick = () => {
     fallbackInput.click();
   };
 
-  // Tangani file hasil kamera bawaan (opsional)
   fallbackInput.onchange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
-    console.log("File dari kamera HP:", file);
-
-    // Di sini bisa diupload ke server, dsb.
-    alert("File tersimpan dari kamera HP: " + file.name);
+    alert("File dari kamera HP: " + file.name);
   };
 }
 
 // =============================
-// FOTO (PAKAI getUserMedia)
+// FOTO
 // =============================
 function takePhoto() {
   if (!mediaStream || !preview.videoWidth || !preview.videoHeight) {
-    // Kalau kamera web tidak aktif, pakai fallback
     if (fallbackInput.style.display === "block") {
       fallbackInput.click();
       return;
@@ -208,13 +274,13 @@ function takePhoto() {
 }
 
 // =============================
-// MIME TYPE YANG DIDUKUNG
+// MIME TYPE
 // =============================
 function getSupportedMimeType() {
   if (!hasMediaRecorder()) return "";
 
   const types = [
-    "video/mp4",                   // dicoba dulu (didukung di sebagian browser) [web:90]
+    "video/mp4",
     "video/webm;codecs=vp8,opus",
     "video/webm"
   ];
@@ -228,11 +294,10 @@ function getSupportedMimeType() {
 }
 
 // =============================
-// REKAM VIDEO (PAKAI MediaRecorder)
+// REKAM VIDEO (15 DETIK MAX)
 // =============================
 function startRecord() {
   if (!mediaStream || !hasMediaRecorder()) {
-    // fallback ke kamera bawaan
     if (fallbackInput.style.display === "block") {
       fallbackInput.click();
       return;
@@ -266,13 +331,16 @@ function startRecord() {
 
   mediaRecorder.onerror = (e) => {
     console.error("MediaRecorder error event:", e.error);
-    alert("Terjadi error saat rekam video.");
     stopRecord();
+    alert("Terjadi error saat rekam.");
   };
 
   mediaRecorder.onstop = () => {
+    captureBtn.classList.remove("recording");
+    clearInterval(recordInterval);
+    updateTimer(0);
+
     if (!chunks.length) {
-      alert("Tidak ada data rekaman. HP mungkin tidak mendukung format ini.");
       return;
     }
 
@@ -286,8 +354,19 @@ function startRecord() {
     downloadFile(url, `video.${ext}`);
   };
 
-  mediaRecorder.start(); // data dikumpulkan sampai stop. [web:10][web:86]
+  mediaRecorder.start();
   isRecording = true;
+  captureBtn.classList.add("recording");
+
+  let elapsed = 0;
+  updateTimer(0);
+  recordInterval = setInterval(() => {
+    elapsed++;
+    updateTimer(elapsed);
+    if (elapsed >= MAX_DURATION) {
+      stopRecord();
+    }
+  }, 1000);
 }
 
 function stopRecord() {
@@ -297,8 +376,13 @@ function stopRecord() {
   }
 }
 
+function updateTimer(sec) {
+  const s = sec.toString().padStart(2, "0");
+  timerLabel.textContent = `00:${s}`;
+}
+
 // =============================
-// DOWNLOAD UTIL
+// DOWNLOAD
 // =============================
 function downloadFile(url, filename) {
   const a = document.createElement("a");
@@ -311,14 +395,12 @@ function downloadFile(url, filename) {
 }
 
 // =============================
-// BUTTON: TEKAN = FOTO, TAHAN = VIDEO
+// TEKAN / TAHAN TOMBOL
 // =============================
-let pressTimer;
-
 function startPress(e) {
   e.preventDefault();
   pressTimer = setTimeout(() => {
-    startRecord();  // tahan >300ms = video
+    startRecord();  // tahan >0.3s = rekam video
   }, 300);
 }
 
@@ -341,9 +423,11 @@ captureBtn.addEventListener("mouseup", endPress);
 captureBtn.addEventListener("mouseleave", endPress);
 
 // =============================
-// INISIALISASI
+// INIT
 // =============================
 startCamera();
+updateTimer(0);
 </script>
+
 </body>
 </html>
