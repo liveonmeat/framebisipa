@@ -1,158 +1,180 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>WebAR – Kamera Belakang Full HD</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Frame Camera Full HD</title>
 
-  <!-- AFRAME -->
-  <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
-
-  <!-- MINDAR FACE -->
-  <script src="https://cdn.jsdelivr.net/npm/mind-ar/dist/mindar-face-aframe.prod.js"></script>
-
-  <style>
+<style>
     body, html {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-      background: black;
+        margin:0;
+        padding:0;
+        overflow:hidden;
+        background:#000;
+        font-family: Arial, sans-serif;
     }
 
-    #overlayFrame {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-      pointer-events: none;
-      z-index: 10;
+    #container {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background:#000;
     }
 
-    #captureBtn {
-      position: fixed;
-      bottom: 30px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 80px;
-      height: 80px;
-      background: white;
-      border-radius: 50%;
-      z-index: 20;
-      border: 4px solid rgba(255,255,255,0.6);
+    video {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
     }
-  </style>
+
+    #frame {
+        position: absolute;
+        top:0;
+        left:0;
+        width:100%;
+        height:100%;
+        pointer-events:none;
+        object-fit: contain;
+    }
+
+    #controls {
+        position: absolute;
+        bottom: 20px;
+        width: 100%;
+        text-align: center;
+        z-index: 10;
+    }
+
+    button {
+        background: white;
+        padding: 15px 25px;
+        border-radius: 12px;
+        border: none;
+        font-size: 18px;
+        margin: 5px;
+    }
+</style>
 </head>
 
 <body>
 
-  <!-- Frame overlay -->
-  <img id="overlayFrame" src="frame.png">
+<div id="container">
+    <video id="video" autoplay playsinline></video>
+    <img id="frame" src="frame.png">
+</div>
 
-  <!-- Tombol capture -->
-  <div id="captureBtn"></div>
-
-  <!-- AR SCENE -->
-  <a-scene mindar-face embedded color-space="sRGB" renderer="colorManagement: true">
-    <a-camera id="arCam"
-      position="0 0 0"
-      active="true"
-      look-controls="enabled: false"
-      ></a-camera>
-
-    <!-- objek 3D jika ada -->
-  </a-scene>
+<div id="controls">
+    <button id="captureBtn">Foto</button>
+    <button id="recordBtn">Rekam</button>
+</div>
 
 <script>
-  // ==== FORCE REAR CAMERA FOR MINDAR ====
-  document.querySelector("a-scene").addEventListener("loaded", () => {
-    const system = document.querySelector("a-scene").systems["mindar-face-system"];
-    system.start({ 
-      video: {
-        facingMode: { exact: "environment" }  // ← kamera belakang
-      }
+let video = document.getElementById("video");
+let captureBtn = document.getElementById("captureBtn");
+let recordBtn = document.getElementById("recordBtn");
+let recorder, recordedChunks = [];
+let isRecording = false;
+
+// ===============================
+// START CAMERA BACK
+// ===============================
+async function startCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { ideal: 1080 },
+                height: { ideal: 1920 },
+                facingMode: { exact: "environment" }
+            },
+            audio: true
+        });
+
+        video.srcObject = stream;
+
+    } catch (err) {
+        console.warn("Back camera gagal, coba kamera default");
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true
+        });
+        video.srcObject = stream;
+    }
+}
+startCamera();
+
+// ===============================
+// FOTO FULL HD + FRAME
+// ===============================
+captureBtn.onclick = function () {
+    let canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1920;
+    let ctx = canvas.getContext("2d");
+
+    // Gambar video
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Gambar frame PNG
+    let frame = document.getElementById("frame");
+    ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+
+    let url = canvas.toDataURL("image/png");
+    download(url, "foto.png");
+};
+
+// ===============================
+// VIDEO WEBM + FRAME
+// ===============================
+recordBtn.onclick = function () {
+    if (!isRecording) {
+        startRecording();
+    } else {
+        stopRecording();
+    }
+};
+
+function startRecording() {
+    isRecording = true;
+    recordBtn.innerText = "Stop";
+
+    recordedChunks = [];
+
+    let stream = video.srcObject;
+
+    recorder = new MediaRecorder(stream, {
+        mimeType: "video/webm; codecs=vp9",
+        videoBitsPerSecond: 8000000 // kualitas tinggi
     });
-  });
 
-  // ==== RECORDING SETUP ====
-  const captureBtn = document.getElementById("captureBtn");
-  const scene = document.querySelector("a-scene");
-  const canvas = scene.renderer.domElement;
+    recorder.ondataavailable = e => recordedChunks.push(e.data);
 
-  let recorder;
-  let chunks = [];
-  let holding = false;
-  let holdTimer = null;
+    recorder.onstop = async () => {
+        let blob = new Blob(recordedChunks, { type: "video/webm" });
 
-  // PHOTO capture
-  function takePhoto() {
-    const tempCanvas = document.createElement("canvas");
-    tempCanvas.width = 1080;
-    tempCanvas.height = 1920;
-
-    const ctx = tempCanvas.getContext("2d");
-    ctx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
-
-    // Draw overlay frame
-    const frame = document.getElementById("overlayFrame");
-    ctx.drawImage(frame, 0, 0, tempCanvas.width, tempCanvas.height);
-
-    const link = document.createElement("a");
-    link.download = "photo.jpg";
-    link.href = tempCanvas.toDataURL("image/jpeg", 1.0);
-    link.click();
-  }
-
-  // VIDEO capture
-  function startRecording() {
-    const stream = canvas.captureStream(30); // 30fps
-    recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
-
-    chunks = [];
-    recorder.ondataavailable = e => chunks.push(e.data);
-    recorder.onstop = saveVideo;
+        let url = URL.createObjectURL(blob);
+        download(url, "video.webm");
+    };
 
     recorder.start();
-  }
+}
 
-  function saveVideo() {
-    const blob = new Blob(chunks, { type: "video/webm" });
-    const url = URL.createObjectURL(blob);
+function stopRecording() {
+    isRecording = false;
+    recordBtn.innerText = "Rekam";
+    recorder.stop();
+}
 
-    const link = document.createElement("a");
-    link.download = "video.webm";
-    link.href = url;
-    link.click();
-  }
-
-  // BUTTON PRESS HANDLING
-  captureBtn.addEventListener("touchstart", startHold);
-  captureBtn.addEventListener("mousedown", startHold);
-
-  captureBtn.addEventListener("touchend", endHold);
-  captureBtn.addEventListener("mouseup", endHold);
-
-  function startHold() {
-    holding = true;
-
-    holdTimer = setTimeout(() => {
-      if (holding) startRecording();
-    }, 250); // hold for video
-  }
-
-  function endHold() {
-    if (!holding) return;
-    holding = false;
-
-    clearTimeout(holdTimer);
-
-    if (recorder && recorder.state === "recording") {
-      recorder.stop();
-    } else {
-      takePhoto();
-    }
-  }
+function download(url, filename) {
+    let a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+}
 </script>
+
 </body>
 </html>
