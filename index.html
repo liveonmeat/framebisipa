@@ -2,281 +2,179 @@
 <html lang="id">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebAR – IG Camera Style</title>
+<title>Snapgram Camera</title>
 
 <style>
-    body, html {
+    body,html{
         margin:0;
         padding:0;
         overflow:hidden;
         background:#000;
-        font-family: Arial, sans-serif;
+        height:100%;
     }
 
-    video, canvas {
-        position: fixed;
-        top:0; left:0;
-        width:100vw;
-        height:100vh;
+    #camera {
+        position:fixed;
+        top:0;
+        left:0;
+        width:100%;
+        height:100%;
         object-fit:cover;
+        z-index:1;
     }
 
     #frame {
-        position: fixed;
-        top:0; left:0;
+        position:fixed;
+        top:0;
+        left:0;
         width:100vw;
         height:100vh;
-        object-fit:cover;
+        object-fit:cover;        /* FIX FRAME 9:16 */
+        z-index:3;
         pointer-events:none;
     }
 
-    /* TOMBOL SHUTTER - INSTAGRAM STYLE */
     #captureBtn {
-        position: fixed;
-        bottom: 35px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 85px;
-        height: 85px;
-        border-radius: 50%;
-        background: rgba(255,255,255,0.9);
-        border: 6px solid rgba(255,255,255,0.7);
-        box-shadow: 0 0 10px rgba(0,0,0,0.3);
-        transition: transform 0.1s ease;
-    }
-
-    #captureBtn:active {
-        transform: translateX(-50%) scale(0.9);
-    }
-
-    /* FLIP CAMERA */
-    #flipBtn {
-        position: fixed;
-        top: 25px;
-        right: 20px;
-        background: rgba(0,0,0,0.5);
-        padding: 10px 16px;
-        border-radius: 25px;
-        color: white;
-        font-weight: bold;
-        border: 1px solid rgba(255,255,255,0.4);
-        backdrop-filter: blur(3px);
-    }
-
-    /* PROGRESS RING */
-    #progressRing {
-        position: fixed;
-        bottom: 27px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 100px;
-        height: 100px;
-        border-radius: 50%;
-        border: 6px solid rgba(255,255,255,0.4);
-        border-top-color: #ff3333;
-        display: none;
-        animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-        0% { transform: translateX(-50%) rotate(0deg); }
-        100% { transform: translateX(-50%) rotate(360deg); }
+        position:fixed;
+        bottom:30px;
+        left:50%;
+        transform:translateX(-50%);
+        width:80px;
+        height:80px;
+        border-radius:50%;
+        border:4px solid #fff;
+        background:rgba(255,255,255,0.2);
+        z-index:5;
+        touch-action:none;
     }
 </style>
 </head>
 
 <body>
 
-<video id="video" autoplay playsinline muted></video>
-<canvas id="canvas"></canvas>
+<video id="camera" autoplay playsinline></video>
 <img id="frame" src="frame.png">
 
 <button id="captureBtn"></button>
-<div id="progressRing"></div>
-
-<button id="flipBtn">Flip</button>
-
-<!-- MP4 ENCODER -->
-<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@2.0.0/dist/mp4-muxer.js"></script>
 
 <script>
-let stream;
-let usingFront = true;
-let isRecording = false;
-let muxer;
-let drawLoop;
-let cameraReady = false;
+    const video = document.getElementById("camera");
+    const btn = document.getElementById("captureBtn");
 
-let camW = 1080;
-let camH = 1920;
+    let recorder;
+    let chunks = [];
+    let recording = false;
+    let pressTimer;
 
-// ================= CAMERA INIT ===================
-async function startCamera() {
-    cameraReady = false;
-
-    if (stream) stream.getTracks().forEach(t => t.stop());
-
-    stream = await navigator.mediaDevices.getUserMedia({
+    // -------------------------
+    // START CAMERA (HIGH QUALITY)
+    // -------------------------
+    navigator.mediaDevices.getUserMedia({
         video: {
-            facingMode: usingFront ? "user" : "environment",
+            facingMode: "environment",
             width: { ideal: 1080 },
             height: { ideal: 1920 }
         },
-        audio: false
+        audio: true
+    }).then(stream => {
+        video.srcObject = stream;
     });
 
-    const video = document.getElementById("video");
-    video.srcObject = stream;
+    // -------------------------
+    // PHOTO CAPTURE (CLICK)
+    // -------------------------
+    function takePhoto() {
+        let canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
 
-    video.onloadedmetadata = () => {
-        video.play();
+        let ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // resolusi asli kamera (REAL)
-        camW = video.videoWidth;
-        camH = video.videoHeight;
+        // Gambar frame di atas
+        let frameImg = document.getElementById("frame");
+        ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
 
-        console.log("Kamera:", camW, camH);
+        let url = canvas.toDataURL("image/jpeg");
+        downloadFile(url, "photo.jpg");
+    }
 
-        cameraReady = true;
-    };
-}
+    // -------------------------
+    // VIDEO RECORD (HOLD PRESS)
+    // -------------------------
+    function startRecording() {
+        const stream = video.srcObject;
+        recorder = new MediaRecorder(stream, {
+            mimeType: "video/webm; codecs=vp9"
+        });
 
-startCamera();
+        recorder.ondataavailable = e => chunks.push(e.data);
 
-document.getElementById("flipBtn").onclick = () => {
-    usingFront = !usingFront;
-    startCamera();
-};
+        recorder.onstop = () => {
+            let blob = new Blob(chunks, { type: "video/webm" });
+            chunks = [];
 
-// =================================================
-//  TAKE PHOTO FIX – FRAME 100% IKUTI KAMERA
-// =================================================
-function takePhoto() {
-    if (!cameraReady) return;
+            // Convert ke MP4 pakai ffmpeg.js (versi ringan)
+            convertToMp4(blob);
+        };
 
-    const video = document.getElementById("video");
-    const frame = document.getElementById("frame");
+        recorder.start();
+        recording = true;
+    }
 
-    const canvas = document.getElementById("canvas");
-    canvas.width = camW;
-    canvas.height = camH;
+    function stopRecording() {
+        if (recording) {
+            recorder.stop();
+            recording = false;
+        }
+    }
 
-    const ctx = canvas.getContext("2d");
+    // -------------------------
+    // BUTTON EVENT
+    // -------------------------
+    btn.addEventListener("mousedown", () => {
+        pressTimer = setTimeout(() => {
+            startRecording(); // tahan → rekam
+        }, 300);
+    });
 
-    // kamera
-    ctx.drawImage(video, 0, 0, camW, camH);
+    btn.addEventListener("mouseup", () => {
+        if (!recording) {
+            clearTimeout(pressTimer);
+            takePhoto(); // klik cepat → foto
+        } else {
+            stopRecording();
+        }
+    });
 
-    // FRAME PNG mengikuti kamera, BUKAN layar
-    ctx.drawImage(frame, 0, 0, camW, camH);
-
-    canvas.toBlob((blob) => {
+    // -------------------------
+    // DOWNLOAD UTILS
+    // -------------------------
+    function downloadFile(url, filename) {
         const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "photo.png";
+        a.href = url;
+        a.download = filename;
         a.click();
-    }, "image/png");
-}
-
-// =================================================
-//  RECORD VIDEO FIX (MP4 MUXER SAFE MODE)
-// =================================================
-function startRecording() {
-    if (!cameraReady) return;
-
-    isRecording = true;
-
-    const video = document.getElementById("video");
-    const frame = document.getElementById("frame");
-    const canvas = document.getElementById("canvas");
-
-    canvas.width = camW;
-    canvas.height = camH;
-
-    const ctx = canvas.getContext("2d");
-
-    muxer = new MP4.Muxer({
-        target: new MP4.ArrayBufferTarget(),
-        video: {
-            codec: "avc",
-            width: camW,
-            height: camH
-        }
-    });
-
-    function draw() {
-        if (!isRecording) return;
-
-        ctx.drawImage(video, 0, 0, camW, camH);
-        ctx.drawImage(frame, 0, 0, camW, camH);
-
-        const img = ctx.getImageData(0, 0, camW, camH);
-
-        try {
-            muxer.addVideoFrame(img);
-        } catch (e) {
-            console.log("Error frame:", e);
-        }
-
-        drawLoop = requestAnimationFrame(draw);
     }
 
-    draw();
-}
+    // MP4 CONVERTER (Mini FFmpeg)
+    async function convertToMp4(webmBlob) {
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: true });
 
-function stopRecording() {
-    isRecording = false;
-    cancelAnimationFrame(drawLoop);
+        await ffmpeg.load();
+        ffmpeg.FS("writeFile", "input.webm", await fetchFile(webmBlob));
+        await ffmpeg.run("-i", "input.webm", "output.mp4");
 
-    muxer.finalize();
-    const buffer = muxer.target.buffer;
-    const blob = new Blob([buffer], { type: "video/mp4" });
+        const mp4Data = ffmpeg.FS("readFile", "output.mp4");
+        const mp4Blob = new Blob([mp4Data.buffer], { type: "video/mp4" });
 
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "video.mp4";
-    a.click();
-
-    document.getElementById("progressRing").style.display = "none";
-}
-
-// =================================================
-// TOMBOL IG STYLE
-// =================================================
-const btn = document.getElementById("captureBtn");
-const ring = document.getElementById("progressRing");
-
-let pressTimer;
-let longPress = false;
-
-btn.addEventListener("mousedown", () => {
-    longPress = false;
-
-    pressTimer = setTimeout(() => {
-        longPress = true;
-        ring.style.display = "block";
-        startRecording();
-    }, 350);
-});
-
-btn.addEventListener("mouseup", () => {
-    clearTimeout(pressTimer);
-
-    if (!longPress) {
-        takePhoto();
-    } else {
-        stopRecording();
+        downloadFile(URL.createObjectURL(mp4Blob), "video.mp4");
     }
-});
-
-btn.addEventListener("mouseleave", () => {
-    clearTimeout(pressTimer);
-});
 </script>
 
-
+<!-- FFMPEG.JS -->
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.4/dist/ffmpeg.min.js"></script>
 
 </body>
 </html>
-
-
-
