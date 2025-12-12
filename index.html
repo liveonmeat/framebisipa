@@ -2,246 +2,185 @@
 <html lang="id">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AR Frame Portrait</title>
-
+<title>Frame Camera Portrait</title>
 <style>
-    body,html{
-        margin:0;
-        padding:0;
-        overflow:hidden;
-        background:black;
-        height:100%;
-    }
-
-    #cameraWrapper {
-        position:fixed;
-        top:0; left:0;
-        width:100vw; height:100vh;
-        overflow:hidden;
-        background:black;
-    }
-
-    video#camera {
-        position:absolute;
-        width:100%;
-        height:100%;
-        object-fit:cover;
-        transform:rotate(0deg);
-    }
-
-    canvas#overlay {
-        position:absolute;
-        top:0; left:0;
-        width:100%;
-        height:100%;
-        pointer-events:none;
-    }
-
-    /* Tombol */
-    #controls{
-        position:fixed;
-        bottom:20px;
-        width:100%;
-        display:flex;
-        justify-content:center;
-        gap:20px;
-        z-index:20;
-    }
-
-    button{
-        padding:12px 20px;
-        background:white;
-        border-radius:50px;
-        font-size:18px;
-        border:none;
-        cursor:pointer;
-    }
-
-    #timer{
-        position:fixed;
-        top:20px;
-        left:20px;
-        font-size:26px;
-        color:white;
-        z-index:50;
-    }
+  body,html{margin:0;padding:0;overflow:hidden;background:#000}
+  #previewCanvas{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:1}
+  #controls{position:fixed;bottom:25px;width:100%;display:flex;justify-content:center;gap:15px;z-index:50}
+  button{font-size:18px;padding:12px 20px;border-radius:50px;border:none;background:#fff}
+  #timer{position:fixed;top:20px;left:50%;transform:translateX(-50%);font-size:22px;color:#fff;z-index:50;display:none}
 </style>
 </head>
-
 <body>
 
-<div id="cameraWrapper">
-    <video id="camera" autoplay playsinline></video>
-    <canvas id="overlay"></canvas>
-</div>
-
-<div id="timer"></div>
-
+<canvas id="previewCanvas"></canvas>
+<div id="timer">00:00</div>
 <div id="controls">
-    <button id="switchCam">Switch</button>
-    <button id="captureBtn">📸 / 🎥</button>
+  <button id="switchBtn">Switch</button>
+  <button id="photoBtn">Foto</button>
+  <button id="recordBtn">Rekam</button>
 </div>
 
 <script>
-let stream, camera = document.getElementById("camera");
-let facing = "environment";
-let recording = false;
-let timer = 0;
-let timerInterval;
+let canvas = document.getElementById("previewCanvas");
+let ctx = canvas.getContext("2d");
+let switchBtn = document.getElementById("switchBtn");
+let photoBtn = document.getElementById("photoBtn");
+let recordBtn = document.getElementById("recordBtn");
+let timerLabel = document.getElementById("timer");
 
-initCamera();
+let video = document.createElement("video");
+video.muted = true;
+video.playsInline = true;
 
-// =============================
-// 1. Kamera Portrait Full Fix
-// =============================
-async function initCamera(){
-    try{
-        stream = await navigator.mediaDevices.getUserMedia({
-            video:{
-                facingMode: { ideal: facing },
-                width:{ ideal: 1080 },
-                height:{ ideal: 1920 }
-            },
-            audio: true
-        });
-        camera.srcObject = stream;
-    }catch(e){
-        alert("Gagal akses kamera: " + e);
-    }
+let frameImg = new Image();
+frameImg.src = "frame.png";
+
+let stream = null;
+let facingDeviceId = null;
+let otherDeviceId = null;
+let isRecording = false;
+let recorder, chunks = [];
+
+let sec = 0, timerInterval = null;
+
+// ===========================
+// PILIH DEVICE CAMERA
+// ===========================
+async function chooseCameraIds(){
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const videoInputs = devices.filter(d=>d.kind==="videoinput");
+
+  // cari kamera belakang/trailing jika ada label
+  let back = videoInputs.find(d=>/back|rear|environment/i.test(d.label));
+  let front = videoInputs.find(d=>/front|user|selfie/i.test(d.label));
+
+  if(back) facingDeviceId = back.deviceId;
+  if(front) otherDeviceId = front.deviceId;
+
+  // jika tidak ada label, ambil urutan
+  if(!facingDeviceId && videoInputs.length>0) facingDeviceId = videoInputs[0].deviceId;
+  if(!otherDeviceId && videoInputs.length>1) otherDeviceId = videoInputs[1].deviceId;
 }
 
-// =============================
-// 2. Switch Camera
-// =============================
-document.getElementById("switchCam").onclick = async()=>{
-    facing = (facing==="environment")?"user":"environment";
-    await initCamera();
+// ===========================
+// START CAMERA DENGAN DEVICEID
+// ===========================
+async function startCamera(deviceId){
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+    stream = null;
+  }
+
+  let constraints = {
+    video: {
+      deviceId: deviceId ? { exact: deviceId } : undefined,
+      width: { ideal: 1080 },
+      height: { ideal: 1920 }
+    },
+    audio: true
+  };
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+    startRenderLoop();
+  } catch(e){
+    console.error("getUserMedia error", e);
+  }
+}
+
+// ===========================
+// RENDER CAMERA + FRAME KE CANVAS
+// ===========================
+function startRenderLoop(){
+  canvas.width = 1080;
+  canvas.height = 1920;
+  function loop(){
+    ctx.drawImage(video, 0,0,canvas.width,canvas.height);
+    if(frameImg.complete) ctx.drawImage(frameImg, 0,0,canvas.width,canvas.height);
+    requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+// ===========================
+// SWITCH CAMERA
+// ===========================
+switchBtn.onclick = async () => {
+  await chooseCameraIds();
+  const useId = (stream && stream.getVideoTracks()[0].getSettings().deviceId === facingDeviceId)
+    ? otherDeviceId : facingDeviceId;
+  await startCamera(useId);
 };
 
-// =============================
-// 3. Gambar Frame Overlay
-// =============================
-const overlay = document.getElementById("overlay");
-const ctx = overlay.getContext("2d");
-const frameImg = new Image();
-frameImg.src = "frame.png";  // GANTI DENGAN FRAME PNG ANDA (1080x1920)
+// ===========================
+// AMBIL FOTO
+// ===========================
+photoBtn.onclick = () => {
+  let url = canvas.toDataURL("image/png");
+  download(url, "photo.png");
+};
 
-frameImg.onload = ()=> drawFrame();
-window.onresize = ()=> drawFrame();
+// ===========================
+// VIDEO RECORDING
+// ===========================
+recordBtn.onclick = () => {
+  if(!isRecording) startRecording(); else stopRecording();
+};
 
-function drawFrame(){
-    overlay.width = window.innerWidth;
-    overlay.height = window.innerHeight;
+function startRecording(){
+  isRecording = true;
+  recordBtn.innerText = "Stop";
+  chunks = [];
 
-    ctx.clearRect(0,0,overlay.width,overlay.height);
+  let recordingStream = canvas.captureStream(30);
+  recorder = new MediaRecorder(recordingStream, { mimeType:"video/webm" });
+  recorder.ondataavailable = e=>chunks.push(e.data);
+  recorder.onstop = exportVideo;
+  recorder.start();
 
-    ctx.drawImage(frameImg, 0, 0, overlay.width, overlay.height);
+  // timer
+  sec=0;
+  timerLabel.style.display="block";
+  timerInterval = setInterval(()=>{
+    timerLabel.innerText = `00:${String(sec++).padStart(2,"0")}`;
+  },1000);
 }
 
-// =============================
-// 4. Foto (ikut frame, portrait)
-// =============================
-document.getElementById("captureBtn").onmousedown = startPress;
-document.getElementById("captureBtn").onmouseup = endPress;
-
-let pressTimer;
-
-function startPress(){
-    pressTimer = setTimeout(startVideoRecording, 500);
-}
-
-function endPress(){
-    clearTimeout(pressTimer);
-    if(!recording){
-        takePhoto();
-    }
-}
-
-function takePhoto(){
-    const canvas = document.createElement("canvas");
-    canvas.width = 1080;
-    canvas.height = 1920;
-    const c = canvas.getContext("2d");
-
-    c.drawImage(camera, 0, 0, 1080, 1920);
-    c.drawImage(frameImg, 0, 0, 1080, 1920);
-
-    const link = document.createElement("a");
-    link.download = "photo.png";
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-}
-
-// =============================
-// 5. Rekam Video Portrait WEBM
-// =============================
-let mediaRecorder;
-let chunks = [];
-
-async function startVideoRecording(){
-    recording = true;
-    startTimer();
-
-    // canvas render ulang portrait
-    const recordCanvas = document.createElement("canvas");
-    recordCanvas.width = 1080;
-    recordCanvas.height = 1920;
-    const rc = recordCanvas.getContext("2d");
-
-    function render(){
-        if(!recording) return;
-        rc.drawImage(camera, 0, 0, 1080, 1920);
-        rc.drawImage(frameImg, 0, 0, 1080, 1920);
-        requestAnimationFrame(render);
-    }
-    render();
-
-    const canvasStream = recordCanvas.captureStream(30);
-
-    mediaRecorder = new MediaRecorder(canvasStream, { mimeType:"video/webm" });
-
-    mediaRecorder.ondataavailable = (e)=> chunks.push(e.data);
-    mediaRecorder.onstop = exportVideo;
-
-    mediaRecorder.start();
-}
-
-function stopVideoRecording(){
-    recording = false;
-    stopTimer();
-    mediaRecorder.stop();
+function stopRecording(){
+  isRecording = false;
+  recordBtn.innerText = "Rekam";
+  clearInterval(timerInterval);
+  timerLabel.style.display="none";
+  recorder.stop();
 }
 
 function exportVideo(){
-    const blob = new Blob(chunks, {type:"video/webm"});
-    chunks = [];
-
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = "video.webm";
-    link.click();
+  let blob = new Blob(chunks,{type:"video/webm"});
+  let url = URL.createObjectURL(blob);
+  download(url,"video.webm");
 }
 
-function startTimer(){
-    timer = 0;
-    timerInterval = setInterval(()=>{
-        timer++;
-        document.getElementById("timer").innerText = timer+"s";
-    },1000);
+// ===========================
+// DOWNLOAD
+// ===========================
+function download(url,name){
+  let a=document.createElement("a");
+  a.href=url;
+  a.download=name;
+  a.click();
 }
 
-function stopTimer(){
-    clearInterval(timerInterval);
-    document.getElementById("timer").innerText = "";
-}
-
-document.getElementById("captureBtn").onmouseleave = ()=>{
-    if(recording) stopVideoRecording();
-};
-document.getElementById("captureBtn").onmouseup = ()=>{
-    if(recording) stopVideoRecording();
-};
-
+// ===========================
+// INIT on Load
+// ===========================
+(async ()=>{
+  await chooseCameraIds();
+  await startCamera(facingDeviceId);
+})();
 </script>
+
 </body>
 </html>
