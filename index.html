@@ -160,35 +160,37 @@ const fallbackInput = document.getElementById("fallbackInput");
 const fallbackNote  = document.getElementById("fallbackNotice");
 const timerLabel    = document.getElementById("recordTimer");
 
-let mediaStream;
+let mediaStream = null;
 let mediaRecorder;
 let chunks = [];
 let isRecording = false;
 let pressTimer;
 let currentFacing = "user";
 let recordInterval = null;
-const MAX_DURATION = 15; // detik
+const MAX_DURATION = 15;
 
-// ganti dengan nama frame kamu
 frame.style.backgroundImage = "url('frame.png')";
 
-/* ====== DETEKSI FITUR ====== */
+/* ============= BASIC CHECK ============= */
 function hasGetUserMedia() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
+
 function hasMediaRecorder() {
   return typeof MediaRecorder !== "undefined";
 }
 
-/* ====== START CAMERA ====== */
+/* ============= START CAMERA ============= */
 async function startCamera() {
   if (!hasGetUserMedia()) {
-    enableFallback("Browser tidak mendukung kamera lewat web.");
+    enableFallback("Browser tidak mendukung kamera.");
     return;
   }
 
+  /** MATIKAN STREAM LAMA DENGAN BENAR */
   if (mediaStream) {
     mediaStream.getTracks().forEach(t => t.stop());
+    preview.srcObject = null;
     mediaStream = null;
   }
 
@@ -196,8 +198,7 @@ async function startCamera() {
     video: {
       facingMode: currentFacing,
       width:  { ideal: 1080 },
-      height: { ideal: 1920 },
-      frameRate: { ideal: 30, max: 30 }
+      height: { ideal: 1920 }
     },
     audio: true
   };
@@ -205,44 +206,36 @@ async function startCamera() {
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
     preview.srcObject = mediaStream;
-  } catch (err) {
-    console.error("getUserMedia error:", err);
-    enableFallback("Gagal akses kamera/mikrofon.");
-  }
 
-  if (!hasMediaRecorder()) {
-    enableFallback("Browser tidak mendukung rekam video langsung.");
+    // Jika kamera berhasil → pastikan tombol kamera tidak override upload
+    captureBtn.onclick = null;
+    fallbackInput.style.display = "none";
+    fallbackNote.textContent = "";
+
+  } catch (err) {
+    console.log("Gagal kamera:", err);
+    enableFallback("Tidak bisa membuka kamera.");
   }
 }
 
-/* tombol flip kamera */
-switchBtn.addEventListener("click", () => {
-  currentFacing = currentFacing === "user" ? "environment" : "user";
-  startCamera();
-});
-
-/* ====== FALLBACK ====== */
+/* ============= ENABLE FALLBACK ============= */
 function enableFallback(msg) {
   fallbackInput.style.display = "block";
-  fallbackNote.textContent = msg || "Gunakan kamera HP.";
+  fallbackNote.textContent = msg;
 
+  // tombol kamera diarahkan ke upload
   captureBtn.onclick = () => fallbackInput.click();
 
-  fallbackInput.onchange = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  fallbackInput.onchange = () => {
+    const file = fallbackInput.files[0];
     alert("File dari kamera HP: " + file.name);
   };
 }
 
-/* ====== FOTO ====== */
+/* ============= TAKE PHOTO ============= */
 function takePhoto() {
-  if (!mediaStream || !preview.videoWidth || !preview.videoHeight) {
-    if (fallbackInput.style.display === "block") {
-      fallbackInput.click();
-      return;
-    }
-    alert("Kamera belum siap.");
+  if (!mediaStream || !preview.videoWidth) {
+    fallbackInput.click();
     return;
   }
 
@@ -259,69 +252,48 @@ function takePhoto() {
   }, "image/jpeg", 0.95);
 }
 
-/* ====== MIME TYPE ====== */
+/* ============= MIME TYPE VIDEO ============= */
 function getSupportedMimeType() {
   if (!hasMediaRecorder()) return "";
-  const types = ["video/mp4","video/webm;codecs=vp8,opus","video/webm"];
+
+  const types = [
+    "video/mp4",
+    "video/webm;codecs=vp8,opus",
+    "video/webm"
+  ];
+
   for (const t of types) {
-    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
-      return t;
-    }
+    if (MediaRecorder.isTypeSupported(t)) return t;
   }
   return "";
 }
 
-/* ====== REKAM 15 DETIK ====== */
+/* ============= START RECORDING ============= */
 function startRecord() {
   if (!mediaStream || !hasMediaRecorder()) {
-    if (fallbackInput.style.display === "block") {
-      fallbackInput.click();
-      return;
-    }
-    alert("Browser tidak mendukung rekam video langsung.");
+    fallbackInput.click();
     return;
   }
+
+  const mime = getSupportedMimeType();
+  mediaRecorder = new MediaRecorder(mediaStream, mime ? { mimeType: mime } : {});
 
   chunks = [];
-  const mimeType = getSupportedMimeType();
-  const options = mimeType ? { mimeType } : {};
 
-  try {
-    mediaRecorder = new MediaRecorder(mediaStream, options);
-  } catch (e) {
-    console.error("MediaRecorder error:", e);
-    if (fallbackInput.style.display === "block") {
-      fallbackInput.click();
-      return;
-    }
-    alert("Format rekam tidak didukung.");
-    return;
-  }
-
-  mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) chunks.push(e.data);
-  };
-
-  mediaRecorder.onerror = (e) => {
-    console.error("MediaRecorder error event:", e.error);
-    stopRecord();
-    alert("Terjadi error saat rekam.");
-  };
+  mediaRecorder.ondataavailable = e => chunks.push(e.data);
 
   mediaRecorder.onstop = () => {
     captureBtn.classList.remove("recording");
     clearInterval(recordInterval);
     updateTimer(0);
 
-    if (!chunks.length) return;
+    const type = mediaRecorder.mimeType || mime || "video/webm";
+    const blob = new Blob(chunks, { type });
 
-    const usedType = mediaRecorder.mimeType || mimeType || "video/webm";
-    const blob = new Blob(chunks, { type: usedType });
-    let ext = "webm";
-    if (usedType.includes("mp4")) ext = "mp4";
+    const ext = type.includes("mp4") ? "mp4" : "webm";
 
     const url = URL.createObjectURL(blob);
-    downloadFile(url, `video.${ext}`);
+    downloadFile(url, "video." + ext);
   };
 
   mediaRecorder.start();
@@ -330,68 +302,68 @@ function startRecord() {
 
   let elapsed = 0;
   updateTimer(0);
+
   recordInterval = setInterval(() => {
     elapsed++;
     updateTimer(elapsed);
-    if (elapsed >= MAX_DURATION) {
-      stopRecord();
-    }
+    if (elapsed >= MAX_DURATION) stopRecord();
   }, 1000);
 }
 
+/* ============= STOP RECORDING ============= */
 function stopRecord() {
   if (mediaRecorder && isRecording) {
-    mediaRecorder.stop();
     isRecording = false;
+    mediaRecorder.stop();
   }
 }
 
+/* ============= TIMER ============= */
 function updateTimer(sec) {
-  const s = sec.toString().padStart(2, "0");
-  timerLabel.textContent = `00:${s}`;
+  timerLabel.textContent = `00:${sec.toString().padStart(2, "0")}`;
 }
 
-/* ====== DOWNLOAD ====== */
+/* ============= DOWNLOAD FILE ============= */
 function downloadFile(url, filename) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
-  document.body.appendChild(a);
   a.click();
-  a.remove();
   URL.revokeObjectURL(url);
 }
 
-/* ====== TEKAN / TAHAN TOMBOL ====== */
+/* ============= TAP / HOLD BUTTON ============= */
 function startPress(e) {
   e.preventDefault();
-  pressTimer = setTimeout(() => {
-    startRecord();  // tahan >0.3s = rekam video
-  }, 300);
+  pressTimer = setTimeout(() => startRecord(), 300);
 }
 
 function endPress(e) {
   e.preventDefault();
   clearTimeout(pressTimer);
 
-  if (isRecording) {
-    stopRecord();
-  } else {
-    takePhoto();
-  }
+  if (isRecording) stopRecord();
+  else takePhoto();
 }
 
 captureBtn.addEventListener("touchstart", startPress);
 captureBtn.addEventListener("mousedown", startPress);
-
 captureBtn.addEventListener("touchend", endPress);
 captureBtn.addEventListener("mouseup", endPress);
 captureBtn.addEventListener("mouseleave", endPress);
 
-/* ====== INIT ====== */
+/* ============= SWITCH CAMERA ============= */
+switchBtn.addEventListener("click", () => {
+  currentFacing = currentFacing === "user" ? "environment" : "user";
+  startCamera();
+});
+
+/* ============= INIT ============= */
 startCamera();
 updateTimer(0);
 </script>
 
+
 </body>
 </html>
+
