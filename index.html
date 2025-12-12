@@ -105,18 +105,40 @@ let usingFront = true;
 let isRecording = false;
 let muxer;
 let drawLoop;
+let cameraReady = false;
+let camW = 1080;
+let camH = 1920;
 
 // ================= CAMERA INIT ===================
 async function startCamera() {
+    cameraReady = false;
+
     if (stream) stream.getTracks().forEach(t => t.stop());
 
     stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: usingFront ? "user" : "environment" },
+        video: {
+            facingMode: usingFront ? "user" : "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+        },
         audio: false
     });
 
-    document.getElementById("video").srcObject = stream;
+    const video = document.getElementById("video");
+    video.srcObject = stream;
+
+    video.onloadedmetadata = () => {
+        video.play();
+
+        camW = video.videoWidth;
+        camH = video.videoHeight;
+
+        console.log("Camera Resolution:", camW, camH);
+
+        cameraReady = true;
+    };
 }
+
 startCamera();
 
 document.getElementById("flipBtn").onclick = () => {
@@ -126,59 +148,71 @@ document.getElementById("flipBtn").onclick = () => {
 
 // ================= TAKE PHOTO ====================
 function takePhoto() {
+    if (!cameraReady) return;
+
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const frame = document.getElementById("frame");
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = camW;
+    canvas.height = camH;
 
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+
+    // kamera
+    ctx.drawImage(video, 0, 0, camW, camH);
+    // overlay frame
+    ctx.drawImage(frame, 0, 0, camW, camH);
 
     canvas.toBlob(blob => {
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         a.download = "photo.png";
         a.click();
-
-        // FIX Freeze Camera
-        video.srcObject = null;
-        video.srcObject = stream;
-        video.play();
     }, "image/png");
 }
 
 // ================= VIDEO RECORD ====================
 function startRecording() {
+    if (!cameraReady) return;
+
     isRecording = true;
 
     const video = document.getElementById("video");
     const frame = document.getElementById("frame");
     const canvas = document.getElementById("canvas");
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = camW;
+    canvas.height = camH;
 
     const ctx = canvas.getContext("2d");
 
     muxer = new MP4.Muxer({
         target: new MP4.ArrayBufferTarget(),
-        video: { codec: "avc", width: canvas.width, height: canvas.height }
+        video: {
+            codec: "avc",
+            width: camW,
+            height: camH
+        }
     });
 
     function draw() {
         if (!isRecording) return;
 
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, camW, camH);
+        ctx.drawImage(frame, 0, 0, camW, camH);
 
-        const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        muxer.addVideoFrame(frameData);
+        const frameData = ctx.getImageData(0, 0, camW, camH);
+
+        try {
+            muxer.addVideoFrame(frameData);
+        } catch (e) {
+            console.warn("Frame error:", e);
+        }
 
         drawLoop = requestAnimationFrame(draw);
     }
+
     draw();
 }
 
@@ -208,6 +242,7 @@ let longPress = false;
 
 btn.addEventListener("mousedown", () => {
     longPress = false;
+
     pressTimer = setTimeout(() => {
         longPress = true;
         ring.style.display = "block";
@@ -230,6 +265,8 @@ btn.addEventListener("mouseleave", () => {
 });
 </script>
 
+
 </body>
 </html>
+
 
