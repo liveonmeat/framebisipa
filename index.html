@@ -1,180 +1,356 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="id">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Snapgram Camera</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Snapgram - Full Script Final (1080x1920)</title>
+
+<!-- hilangkan favicon 404 -->
+<link rel="icon" href="data:,">
 
 <style>
-    body,html{
-        margin:0;
-        padding:0;
-        overflow:hidden;
-        background:#000;
-        height:100%;
-    }
+  :root{--btn-size:84px;}
+  html,body{height:100%;margin:0;background:#000;font-family:Arial,Helvetica,sans-serif}
+  /* preview canvas yang terlihat user (skala penuh, object-fit:cover behaviour) */
+  #preview {
+    position:fixed; inset:0;
+    width:100vw; height:100vh;
+    display:block;
+    object-fit:cover;
+    background:#000;
+    touch-action:none;
+  }
 
-    #camera {
-        position:fixed;
-        top:0;
-        left:0;
-        width:100%;
-        height:100%;
-        object-fit:cover;
-        z-index:1;
-    }
-
-    #frame {
-        position:fixed;
-        top:0;
-        left:0;
-        width:100vw;
-        height:100vh;
-        object-fit:cover;        /* FIX FRAME 9:16 */
-        z-index:3;
-        pointer-events:none;
-    }
-
-    #captureBtn {
-        position:fixed;
-        bottom:30px;
-        left:50%;
-        transform:translateX(-50%);
-        width:80px;
-        height:80px;
-        border-radius:50%;
-        border:4px solid #fff;
-        background:rgba(255,255,255,0.2);
-        z-index:5;
-        touch-action:none;
-    }
+  /* tombol & UI */
+  #captureBtn{
+    position:fixed;
+    bottom:28px;
+    left:50%;
+    transform:translateX(-50%);
+    width:var(--btn-size); height:var(--btn-size);
+    border-radius:50%;
+    background:rgba(255,255,255,0.95);
+    border:6px solid rgba(255,255,255,0.7);
+    z-index:50;
+    box-shadow:0 6px 18px rgba(0,0,0,0.4);
+    -webkit-tap-highlight-color: transparent;
+  }
+  #flipBtn{
+    position:fixed; top:22px; right:18px;
+    z-index:60; padding:8px 12px; border-radius:20px;
+    background:rgba(0,0,0,0.45); color:#fff; border:1px solid rgba(255,255,255,0.15);
+    font-weight:600;
+  }
+  #progressRing{position:fixed; bottom:20px; left:50%; transform:translateX(-50%); width:96px; height:96px; border-radius:50%; border:6px solid rgba(255,255,255,0.28); border-top-color:#ff3333; display:none; z-index:49; animation:spin 1s linear infinite;}
+  @keyframes spin{0%{transform:translateX(-50%) rotate(0deg);}100%{transform:translateX(-50%) rotate(360deg);}}
+  /* hide native video (we use canvas preview) */
+  video{display:none}
 </style>
 </head>
-
 <body>
 
-<video id="camera" autoplay playsinline></video>
-<img id="frame" src="frame.png">
+<!-- video stream hidden (source) -->
+<video id="video" autoplay playsinline muted></video>
 
-<button id="captureBtn"></button>
+<!-- preview canvas visible to user -->
+<canvas id="preview"></canvas>
+
+<!-- frame image (1080x1920) - pastikan file berada di folder yang sama -->
+<img id="frameImg" src="frame.png" alt="frame" style="display:none;" />
+
+<!-- UI -->
+<button id="captureBtn" aria-label="Capture"></button>
+<button id="flipBtn">Flip</button>
+<div id="progressRing"></div>
+
+<!-- mp4-muxer: digunakan untuk membuat mp4 dari ImageData -->
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@2.0.0/dist/mp4-muxer.js"></script>
 
 <script>
-    const video = document.getElementById("camera");
-    const btn = document.getElementById("captureBtn");
+/*
+  FULL SCRIPT FINAL
+  - Frame resolution: 1080x1920 (portrait)
+  - Preview canvas scales to viewport with cover behaviour
+  - Photo -> forced 1080x1920 crop & overlay frame
+  - Video -> recorded as MP4 using mp4-muxer (video-only)
+  - Tap = photo, Hold = record (mouse & touch)
+*/
 
-    let recorder;
-    let chunks = [];
-    let recording = false;
-    let pressTimer;
+const video = document.getElementById('video');
+const preview = document.getElementById('preview');
+const frameImg = document.getElementById('frameImg');
+const captureBtn = document.getElementById('captureBtn');
+const flipBtn = document.getElementById('flipBtn');
+const progressRing = document.getElementById('progressRing');
 
-    // -------------------------
-    // START CAMERA (HIGH QUALITY)
-    // -------------------------
-    navigator.mediaDevices.getUserMedia({
-        video: {
-            facingMode: "environment",
-            width: { ideal: 1080 },
-            height: { ideal: 1920 }
-        },
-        audio: true
-    }).then(stream => {
-        video.srcObject = stream;
+let usingFront = false;          // default back camera
+let stream = null;
+let cameraReady = false;
+let camW = 1080;                 // kita paksa untuk output foto/video: 1080x1920
+let camH = 1920;
+let isRecording = false;
+let drawLoop = null;
+let mp4mux = null;
+let muxTarget = null;
+
+// Offscreen canvas (processing fixed 1080x1920)
+const procCanvas = document.createElement('canvas');
+procCanvas.width = camW; procCanvas.height = camH;
+const procCtx = procCanvas.getContext('2d');
+
+// Preview canvas shown to user (fills screen)
+function fitPreviewToWindow() {
+  preview.width = window.innerWidth;
+  preview.height = window.innerHeight;
+}
+fitPreviewToWindow();
+window.addEventListener('resize', fitPreviewToWindow);
+
+// Start camera with ideal constraints and wait for metadata
+async function startCamera() {
+  cameraReady = false;
+  if (stream) {
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+  }
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: usingFront ? 'user' : 'environment',
+        width: { ideal: 1920 },
+        height: { ideal: 3840 }
+      },
+      audio: false
+    });
+    video.srcObject = stream;
+
+    await new Promise(resolve => {
+      if (video.readyState >= 2) resolve();
+      else video.onloadedmetadata = () => resolve();
     });
 
-    // -------------------------
-    // PHOTO CAPTURE (CLICK)
-    // -------------------------
-    function takePhoto() {
-        let canvas = document.createElement("canvas");
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
+    // update camW/camH to actual sensor size, but we will still render to fixed 1080x1920
+    // Keep camW/camH for cropping math only
+    const actualW = video.videoWidth || 1080;
+    const actualH = video.videoHeight || 1920;
+    console.log('Actual camera size:', actualW, actualH);
 
-        let ctx = canvas.getContext("2d");
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    cameraReady = true;
 
-        // Gambar frame di atas
-        let frameImg = document.getElementById("frame");
-        ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
+    // start preview rendering (always running)
+    startPreviewLoop();
 
-        let url = canvas.toDataURL("image/jpeg");
-        downloadFile(url, "photo.jpg");
+  } catch (err) {
+    console.error('startCamera error:', err);
+    alert('Gagal mengakses kamera: ' + err.message);
+  }
+}
+
+// draw camera + frame into procCanvas (1080x1920) then scale to preview canvas for display
+function drawOnceToPreview() {
+  if (!cameraReady) return;
+
+  // We want to draw the camera into procCanvas with cover-style cropping so final is 9:16
+  const vW = video.videoWidth;
+  const vH = video.videoHeight;
+  const videoRatio = vW / vH;
+  const targetRatio = camW / camH;
+
+  let drawW, drawH, sx=0, sy=0;
+
+  if (videoRatio > targetRatio) {
+    // video more wide -> crop left/right
+    drawH = vH;
+    drawW = vH * targetRatio;
+    sx = (vW - drawW) / 2;
+    sy = 0;
+    // drawImage(video, sx, sy, drawW, drawH, 0,0,camW,camH)
+    procCtx.drawImage(video, sx, sy, drawW, drawH, 0, 0, camW, camH);
+  } else {
+    // video taller -> crop top/bottom
+    drawW = vW;
+    drawH = vW / targetRatio;
+    sx = 0;
+    sy = (vH - drawH) / 2;
+    procCtx.drawImage(video, sx, sy, drawW, drawH, 0, 0, camW, camH);
+  }
+
+  // draw frame overlay covering full procCanvas
+  if (frameImg.complete) {
+    procCtx.drawImage(frameImg, 0, 0, camW, camH);
+  }
+
+  // scale procCanvas -> preview canvas (cover behavior)
+  const pvW = preview.width, pvH = preview.height;
+  const pvRatio = pvW / pvH;
+
+  // Draw procCanvas scaled to fill preview with cover similar effect:
+  let srcX=0, srcY=0, srcW=camW, srcH=camH;
+  const procRatio = camW / camH;
+
+  if (procRatio > pvRatio) {
+    // proc wider than preview -> crop left-right after scaling down
+    const scaledH = camH;
+    const scaledW = camH * pvRatio;
+    srcW = scaledW;
+    srcX = (camW - srcW) / 2;
+  } else {
+    // proc taller -> crop top-bottom
+    const scaledW = camW;
+    const scaledH = camW / pvRatio;
+    srcH = scaledH;
+    srcY = (camH - srcH) / 2;
+  }
+
+  // clear preview
+  const pctx = preview.getContext('2d');
+  pctx.clearRect(0,0,pvW,pvH);
+  pctx.drawImage(procCanvas, srcX, srcY, srcW, srcH, 0, 0, pvW, pvH);
+}
+
+// keep preview loop running (lightweight)
+function startPreviewLoop() {
+  if (drawLoop) return;
+  function loop() {
+    drawOnceToPreview();
+    drawLoop = requestAnimationFrame(loop);
+  }
+  loop();
+}
+
+// ---------- PHOTO (forced 1080x1920) ----------
+function downloadDataURL(dataURL, filename){
+  const a = document.createElement('a');
+  a.href = dataURL;
+  a.download = filename;
+  a.click();
+}
+
+function takePhoto() {
+  if (!cameraReady) return;
+
+  // procCanvas already contains latest draw in preview loop, but ensure one fresh draw
+  drawOnceToPreview();
+
+  // get JPEG from procCanvas (1080x1920) - high quality
+  const dataUrl = procCanvas.toDataURL('image/jpeg', 0.92);
+  downloadDataURL(dataUrl, 'photo_1080x1920.jpg');
+}
+
+// ---------- RECORD VIDEO (MP4 via mp4-muxer) ----------
+function startRecording() {
+  if (!cameraReady || isRecording) return;
+
+  try {
+    // create muxer & target buffer
+    muxTarget = new MP4.ArrayBufferTarget();
+    mp4mux = new MP4.Muxer({ target: muxTarget, video: { codec: 'avc', width: camW, height: camH } });
+  } catch (e) {
+    console.error('mp4-muxer init error', e);
+    alert('Gagal memulai perekaman mp4: ' + e.message);
+    return;
+  }
+
+  isRecording = true;
+  progressRing.style.display = 'block';
+
+  // we capture frames from procCanvas at ~30fps using requestAnimationFrame with timing control
+  let lastTime = performance.now();
+  const fps = 25; // target fps (reduces CPU)
+  const frameInterval = 1000 / fps;
+
+  function captureLoop(now) {
+    if (!isRecording) return;
+
+    if (now - lastTime >= frameInterval) {
+      // ensure latest draw
+      drawOnceToPreview();
+
+      // get ImageData from procCanvas
+      try {
+        const frameData = procCtx.getImageData(0, 0, camW, camH);
+        mp4mux.addVideoFrame(frameData);
+      } catch (e) {
+        console.warn('addVideoFrame error:', e);
+      }
+
+      lastTime = now;
     }
+    requestAnimationFrame(captureLoop);
+  }
 
-    // -------------------------
-    // VIDEO RECORD (HOLD PRESS)
-    // -------------------------
-    function startRecording() {
-        const stream = video.srcObject;
-        recorder = new MediaRecorder(stream, {
-            mimeType: "video/webm; codecs=vp9"
-        });
+  requestAnimationFrame(captureLoop);
+}
 
-        recorder.ondataavailable = e => chunks.push(e.data);
+function stopRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  progressRing.style.display = 'none';
 
-        recorder.onstop = () => {
-            let blob = new Blob(chunks, { type: "video/webm" });
-            chunks = [];
+  try {
+    mp4mux.finalize();
+    const buffer = muxTarget.buffer;
+    const blob = new Blob([buffer], { type: 'video/mp4' });
+    const url = URL.createObjectURL(blob);
 
-            // Convert ke MP4 pakai ffmpeg.js (versi ringan)
-            convertToMp4(blob);
-        };
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'video_1080x1920.mp4';
+    a.click();
 
-        recorder.start();
-        recording = true;
-    }
+    // cleanup
+    mp4mux = null;
+    muxTarget = null;
+  } catch (e) {
+    console.error('finalize error', e);
+    alert('Gagal membuat file MP4: ' + e.message);
+  }
+}
 
-    function stopRecording() {
-        if (recording) {
-            recorder.stop();
-            recording = false;
-        }
-    }
+// ---------- BUTTON (tap vs hold) - support mouse & touch ----------
+let pressTimeout = null;
+let holding = false;
+const holdDelay = 350; // ms to consider as hold
 
-    // -------------------------
-    // BUTTON EVENT
-    // -------------------------
-    btn.addEventListener("mousedown", () => {
-        pressTimer = setTimeout(() => {
-            startRecording(); // tahan → rekam
-        }, 300);
-    });
+function onPointerDown(e){
+  e.preventDefault();
+  holding = false;
+  pressTimeout = setTimeout(() => {
+    holding = true;
+    startRecording();
+  }, holdDelay);
+}
 
-    btn.addEventListener("mouseup", () => {
-        if (!recording) {
-            clearTimeout(pressTimer);
-            takePhoto(); // klik cepat → foto
-        } else {
-            stopRecording();
-        }
-    });
+function onPointerUp(e){
+  e.preventDefault();
+  if (pressTimeout) { clearTimeout(pressTimeout); pressTimeout = null; }
 
-    // -------------------------
-    // DOWNLOAD UTILS
-    // -------------------------
-    function downloadFile(url, filename) {
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        a.click();
-    }
+  if (!holding) {
+    // tap -> photo
+    takePhoto();
+  } else {
+    // was holding -> stop recording
+    stopRecording();
+  }
+}
 
-    // MP4 CONVERTER (Mini FFmpeg)
-    async function convertToMp4(webmBlob) {
-        const { createFFmpeg, fetchFile } = FFmpeg;
-        const ffmpeg = createFFmpeg({ log: true });
+// attach mouse and touch events
+captureBtn.addEventListener('mousedown', onPointerDown);
+captureBtn.addEventListener('mouseup', onPointerUp);
+captureBtn.addEventListener('mouseleave', (e)=>{ if (pressTimeout) clearTimeout(pressTimeout); });
+captureBtn.addEventListener('touchstart', onPointerDown, {passive:false});
+captureBtn.addEventListener('touchend', onPointerUp);
 
-        await ffmpeg.load();
-        ffmpeg.FS("writeFile", "input.webm", await fetchFile(webmBlob));
-        await ffmpeg.run("-i", "input.webm", "output.mp4");
+// flip camera
+flipBtn.addEventListener('click', () => {
+  usingFront = !usingFront;
+  startCamera();
+});
 
-        const mp4Data = ffmpeg.FS("readFile", "output.mp4");
-        const mp4Blob = new Blob([mp4Data.buffer], { type: "video/mp4" });
+// start everything
+startCamera();
 
-        downloadFile(URL.createObjectURL(mp4Blob), "video.mp4");
-    }
 </script>
-
-<!-- FFMPEG.JS -->
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.4/dist/ffmpeg.min.js"></script>
-
 </body>
 </html>
