@@ -2,236 +2,246 @@
 <html lang="id">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Frame Camera - Full HD Portrait</title>
+<title>AR Frame Portrait</title>
 
 <style>
-    body, html {
+    body,html{
         margin:0;
         padding:0;
         overflow:hidden;
-        background:#000;
-        font-family: Arial, sans-serif;
+        background:black;
+        height:100%;
     }
 
-    /* Canvas tempat video + frame digabung */
-    #previewCanvas {
-        position: fixed;
-        top:0;
-        left:0;
-        width:100vw;
-        height:100vh;
-        z-index: 1;
-        background:#000;
+    #cameraWrapper {
+        position:fixed;
+        top:0; left:0;
+        width:100vw; height:100vh;
+        overflow:hidden;
+        background:black;
     }
 
-    /* Switch camera button */
-    #switchBtn {
-        position: fixed;
-        top: 20px;
-        left: 20px;
-        z-index: 9999;
-        background: rgba(0,0,0,0.5);
+    video#camera {
+        position:absolute;
+        width:100%;
+        height:100%;
+        object-fit:cover;
+        transform:rotate(0deg);
+    }
+
+    canvas#overlay {
+        position:absolute;
+        top:0; left:0;
+        width:100%;
+        height:100%;
+        pointer-events:none;
+    }
+
+    /* Tombol */
+    #controls{
+        position:fixed;
+        bottom:20px;
+        width:100%;
+        display:flex;
+        justify-content:center;
+        gap:20px;
+        z-index:20;
+    }
+
+    button{
+        padding:12px 20px;
+        background:white;
+        border-radius:50px;
+        font-size:18px;
+        border:none;
+        cursor:pointer;
+    }
+
+    #timer{
+        position:fixed;
+        top:20px;
+        left:20px;
+        font-size:26px;
         color:white;
-        padding: 9px 16px;
-        border-radius: 10px;
-        border: 1px solid white;
-        font-size: 16px;
-    }
-
-    /* Timer */
-    #timer {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        z-index: 9999;
-        color:white;
-        font-size: 22px;
-        display:none;
-    }
-
-    /* Control buttons */
-    #controls {
-        position: fixed;
-        bottom: 25px;
-        width: 100%;
-        text-align: center;
-        z-index: 10000;
-    }
-
-    button {
-        background: white;
-        padding: 14px 28px;
-        border-radius: 14px;
-        border: none;
-        font-size: 18px;
-        margin: 5px;
+        z-index:50;
     }
 </style>
 </head>
 
 <body>
 
-<canvas id="previewCanvas"></canvas>
+<div id="cameraWrapper">
+    <video id="camera" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
+</div>
 
-<button id="switchBtn">Switch</button>
-<div id="timer">00:00</div>
+<div id="timer"></div>
 
 <div id="controls">
-    <button id="photoBtn">Foto</button>
-    <button id="recordBtn">Rekam</button>
+    <button id="switchCam">Switch</button>
+    <button id="captureBtn">📸 / 🎥</button>
 </div>
 
 <script>
-let canvas = document.getElementById("previewCanvas");
-let ctx = canvas.getContext("2d");
-
+let stream, camera = document.getElementById("camera");
 let facing = "environment";
-let videoStream;
-let video = document.createElement("video");
-video.playsinline = true;
-video.muted = true;
-video.autoplay = true;
-
-let frameImg = new Image();
-frameImg.src = "frame.png";
-
 let recording = false;
-let chunks = [];
-let recorder;
+let timer = 0;
+let timerInterval;
 
-let timerLabel = document.getElementById("timer");
-let timerInterval = null;
-let sec = 0;
+initCamera();
 
-/* =====================================
-   START CAMERA (BACK CAMERA DEFAULT)
-===================================== */
-async function startCamera() {
-    if (videoStream) videoStream.getTracks().forEach(t => t.stop());
-
-    try {
-        videoStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 1080 },
-                height: { ideal: 1920 },
-                facingMode: facing
+// =============================
+// 1. Kamera Portrait Full Fix
+// =============================
+async function initCamera(){
+    try{
+        stream = await navigator.mediaDevices.getUserMedia({
+            video:{
+                facingMode: { ideal: facing },
+                width:{ ideal: 1080 },
+                height:{ ideal: 1920 }
             },
             audio: true
         });
-    } catch (err) {
-        videoStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true
-        });
+        camera.srcObject = stream;
+    }catch(e){
+        alert("Gagal akses kamera: " + e);
     }
-
-    video.srcObject = videoStream;
-
-    video.onloadedmetadata = () => {
-        resizeCanvas();
-        drawLoop();
-    };
 }
 
-function resizeCanvas() {
+// =============================
+// 2. Switch Camera
+// =============================
+document.getElementById("switchCam").onclick = async()=>{
+    facing = (facing==="environment")?"user":"environment";
+    await initCamera();
+};
+
+// =============================
+// 3. Gambar Frame Overlay
+// =============================
+const overlay = document.getElementById("overlay");
+const ctx = overlay.getContext("2d");
+const frameImg = new Image();
+frameImg.src = "frame.png";  // GANTI DENGAN FRAME PNG ANDA (1080x1920)
+
+frameImg.onload = ()=> drawFrame();
+window.onresize = ()=> drawFrame();
+
+function drawFrame(){
+    overlay.width = window.innerWidth;
+    overlay.height = window.innerHeight;
+
+    ctx.clearRect(0,0,overlay.width,overlay.height);
+
+    ctx.drawImage(frameImg, 0, 0, overlay.width, overlay.height);
+}
+
+// =============================
+// 4. Foto (ikut frame, portrait)
+// =============================
+document.getElementById("captureBtn").onmousedown = startPress;
+document.getElementById("captureBtn").onmouseup = endPress;
+
+let pressTimer;
+
+function startPress(){
+    pressTimer = setTimeout(startVideoRecording, 500);
+}
+
+function endPress(){
+    clearTimeout(pressTimer);
+    if(!recording){
+        takePhoto();
+    }
+}
+
+function takePhoto(){
+    const canvas = document.createElement("canvas");
     canvas.width = 1080;
     canvas.height = 1920;
+    const c = canvas.getContext("2d");
+
+    c.drawImage(camera, 0, 0, 1080, 1920);
+    c.drawImage(frameImg, 0, 0, 1080, 1920);
+
+    const link = document.createElement("a");
+    link.download = "photo.png";
+    link.href = canvas.toDataURL("image/png");
+    link.click();
 }
 
-/* =====================================
-   DRAW FRAME + VIDEO (PORTRAIT)
-===================================== */
-function drawLoop() {
-    ctx.clearRect(0,0,canvas.width,canvas.height);
+// =============================
+// 5. Rekam Video Portrait WEBM
+// =============================
+let mediaRecorder;
+let chunks = [];
 
-    // gambar kamera
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // gambar frame PNG
-    ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
-
-    requestAnimationFrame(drawLoop);
-}
-
-/* =====================================
-   TAKE PHOTO (PORTRAIT + FRAME)
-===================================== */
-document.getElementById("photoBtn").onclick = () => {
-    let url = canvas.toDataURL("image/png");
-    download(url, "foto.png");
-};
-
-/* =====================================
-   RECORD VIDEO (CANVAS STREAM)
-===================================== */
-document.getElementById("recordBtn").onclick = () => {
-    if (!recording) startRecord();
-    else stopRecord();
-};
-
-function startRecord() {
+async function startVideoRecording(){
     recording = true;
-    document.getElementById("recordBtn").innerText = "Stop";
+    startTimer();
 
-    chunks = [];
-    let canvasStream = canvas.captureStream(30);
+    // canvas render ulang portrait
+    const recordCanvas = document.createElement("canvas");
+    recordCanvas.width = 1080;
+    recordCanvas.height = 1920;
+    const rc = recordCanvas.getContext("2d");
 
-    recorder = new MediaRecorder(canvasStream, {
-        mimeType: "video/webm; codecs=vp9",
-        videoBitsPerSecond: 8000000
-    });
+    function render(){
+        if(!recording) return;
+        rc.drawImage(camera, 0, 0, 1080, 1920);
+        rc.drawImage(frameImg, 0, 0, 1080, 1920);
+        requestAnimationFrame(render);
+    }
+    render();
 
-    recorder.ondataavailable = e => chunks.push(e.data);
-    recorder.onstop = () => {
-        let blob = new Blob(chunks, { type: "video/webm" });
-        let url = URL.createObjectURL(blob);
-        download(url, "video.webm");
-    };
+    const canvasStream = recordCanvas.captureStream(30);
 
-    recorder.start();
+    mediaRecorder = new MediaRecorder(canvasStream, { mimeType:"video/webm" });
 
-    // start timer
-    sec = 0;
-    timerLabel.style.display = "block";
-    timerInterval = setInterval(() => {
-        sec++;
-        timerLabel.textContent =
-            `00:${sec.toString().padStart(2,"0")}`;
-    }, 1000);
+    mediaRecorder.ondataavailable = (e)=> chunks.push(e.data);
+    mediaRecorder.onstop = exportVideo;
+
+    mediaRecorder.start();
 }
 
-function stopRecord() {
+function stopVideoRecording(){
     recording = false;
-    document.getElementById("recordBtn").innerText = "Rekam";
-
-    recorder.stop();
-
-    // stop timer
-    clearInterval(timerInterval);
-    timerLabel.style.display = "none";
+    stopTimer();
+    mediaRecorder.stop();
 }
 
-/* =====================================
-   SWITCH CAMERA
-===================================== */
-document.getElementById("switchBtn").onclick = () => {
-    facing = (facing === "environment") ? "user" : "environment";
-    startCamera();
+function exportVideo(){
+    const blob = new Blob(chunks, {type:"video/webm"});
+    chunks = [];
+
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "video.webm";
+    link.click();
+}
+
+function startTimer(){
+    timer = 0;
+    timerInterval = setInterval(()=>{
+        timer++;
+        document.getElementById("timer").innerText = timer+"s";
+    },1000);
+}
+
+function stopTimer(){
+    clearInterval(timerInterval);
+    document.getElementById("timer").innerText = "";
+}
+
+document.getElementById("captureBtn").onmouseleave = ()=>{
+    if(recording) stopVideoRecording();
+};
+document.getElementById("captureBtn").onmouseup = ()=>{
+    if(recording) stopVideoRecording();
 };
 
-/* =====================================
-   DOWNLOAD
-===================================== */
-function download(url, name) {
-    let a = document.createElement("a");
-    a.href = url;
-    a.download = name;
-    a.click();
-}
-
-/* START */
-startCamera();
 </script>
-
 </body>
 </html>
