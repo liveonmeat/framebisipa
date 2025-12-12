@@ -1,187 +1,182 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="id">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-<title>Snapgram HD</title>
-<link rel="icon" href="data:,">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>SnapCam 1080x1920</title>
+
 <style>
-  html,body{height:100%;margin:0;background:#000;font-family:Arial}
-  #preview { position:fixed; inset:0; width:100vw; height:100vh; display:block; background:#000; z-index:1; }
-  video#sourceVideo { position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; opacity:0; }
-  #captureBtn{
-    position:fixed; bottom:26px; left:50%; transform:translateX(-50%);
-    width:84px; height:84px; border-radius:50%;
-    background:#fff; border:6px solid rgba(255,255,255,0.7); z-index:50;
-  }
-  #flipBtn{
-    position:fixed; top:20px; right:20px;
-    padding:8px 14px; color:#fff; background:rgba(0,0,0,0.5);
-    border-radius:20px; border:1px solid rgba(255,255,255,0.3); z-index:50;
-  }
+    body, html {
+        margin: 0; padding: 0;
+        width: 100%; height: 100%;
+        background: #000;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+    }
+
+    #preview {
+        position: fixed;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: #000;
+    }
+
+    #frame {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+    }
+
+    #captureBtn {
+        position: fixed;
+        bottom: 40px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 85px; height: 85px;
+        border-radius: 50%;
+        background: white;
+        border: 4px solid #ddd;
+        box-shadow: 0 0 5px #000;
+    }
+
+    #captureBtn:active {
+        transform: translateX(-50%) scale(0.9);
+    }
 </style>
 </head>
+
 <body>
 
-<video id="sourceVideo" autoplay playsinline muted></video>
-<canvas id="preview"></canvas>
-<img id="frameImg" src="frame.png" style="display:none">
+<video id="preview" autoplay playsinline></video>
+<div id="frame"></div>
 
 <button id="captureBtn"></button>
-<button id="flipBtn">Flip</button>
 
 <script>
-const OUT_W = 1080, OUT_H = 1920;
-
-const sourceVideo = document.getElementById("sourceVideo");
 const preview = document.getElementById("preview");
-const frameImg = document.getElementById("frameImg");
-
-const pctx = preview.getContext("2d");
-
-function fitPreview() {
-  preview.width = window.innerWidth;
-  preview.height = window.innerHeight;
-}
-fitPreview();
-window.addEventListener("resize", fitPreview);
-
-let usingFront = false;
-let stream = null;
-let micStream = null;
-let mediaRecorder = null;
-let recordedChunks = [];
-let holding = false;
-let pressTimer = null;
-
-// CANVAS KHUSUS OUTPUT 1080x1920
-const procCanvas = document.createElement("canvas");
-procCanvas.width = OUT_W;
-procCanvas.height = OUT_H;
-const procCtx = procCanvas.getContext("2d");
-
-// Start kamera
-async function startCamera() {
-  if (stream) stream.getTracks().forEach(t => t.stop());
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: usingFront ? "user" : "environment",
-      width: { ideal: 4000 },
-      height: { ideal: 4000 }
-    },
-    audio: false
-  });
-
-  sourceVideo.srcObject = stream;
-  await sourceVideo.play();
-  requestAnimationFrame(previewLoop);
-}
-
-function previewLoop() {
-  drawToCanvas();
-  requestAnimationFrame(previewLoop);
-}
-
-function drawToCanvas() {
-  let vW = sourceVideo.videoWidth;
-  let vH = sourceVideo.videoHeight;
-
-  if (!vW || !vH) return;
-
-  let ratioVideo = vW / vH;
-  let ratioTarget = OUT_W / OUT_H;
-
-  let sx = 0, sy = 0, sw = vW, sh = vH;
-
-  if (ratioVideo > ratioTarget) {
-    sw = vH * ratioTarget;
-    sx = (vW - sw) / 2;
-  } else {
-    sh = vW / ratioTarget;
-    sy = (vH - sh) / 2;
-  }
-
-  procCtx.drawImage(sourceVideo, sx, sy, sw, sh, 0, 0, OUT_W, OUT_H);
-  procCtx.drawImage(frameImg, 0, 0, OUT_W, OUT_H);
-
-  // tampil ke layar
-  pctx.drawImage(procCanvas, 0, 0, preview.width, preview.height);
-}
-
-// FOTO
-function takePhoto() {
-  drawToCanvas();
-  let url = procCanvas.toDataURL("image/jpeg", 0.92);
-  download(url, "photo_hd_1080x1920.jpg");
-}
-
-// VIDEO TANPA FFMPEG → OUTPUT .MP4
-async function startRecording() {
-  micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-  const canvasStream = procCanvas.captureStream(30);
-  const finalStream = new MediaStream([
-    ...canvasStream.getVideoTracks(),
-    ...micStream.getAudioTracks()
-  ]);
-
-  mediaRecorder = new MediaRecorder(finalStream, {
-    mimeType: "video/webm;codecs=vp8,opus"
-  });
-
-  recordedChunks = [];
-  mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
-
-  mediaRecorder.start();
-}
-
-function stopRecording() {
-  mediaRecorder.stop();
-
-  setTimeout(() => {
-    const blob = new Blob(recordedChunks, { type: "video/webm" });
-
-    // rename menjadi MP4
-    const renamedBlob = new Blob([blob], { type: "video/mp4" });
-    const url = URL.createObjectURL(renamedBlob);
-
-    download(url, "video_hd_1080x1920.mp4");
-
-    micStream.getTracks().forEach(t => t.stop());
-  }, 300);
-}
-
-function download(url, name) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-}
-
-// Button Logic
+const frame = document.getElementById("frame");
 const captureBtn = document.getElementById("captureBtn");
 
-captureBtn.addEventListener("mousedown", () => {
-  pressTimer = setTimeout(() => {
-    holding = true;
-    startRecording();
-  }, 350);
-});
+let mediaStream;
+let mediaRecorder;
+let chunks = [];
+let isRecording = false;
+let pressTimer;
 
-captureBtn.addEventListener("mouseup", () => {
-  clearTimeout(pressTimer);
-  if (holding) stopRecording();
-  else takePhoto();
-  holding = false;
-});
+// SET FRAME (KALAU ADA GAMBAR OVERLAY)
+// frame.style.backgroundImage = "url(frame.png)"; // opsional
 
-// Flip Kamera
-document.getElementById("flipBtn").onclick = () => {
-  usingFront = !usingFront;
-  startCamera();
-};
+// =============================
+// START CAMERA
+// =============================
+async function startCamera() {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: "user",
+            width: { ideal: 1080 },
+            height: { ideal: 1920 }
+        },
+        audio: true
+    });
+
+    preview.srcObject = mediaStream;
+}
 
 startCamera();
+
+// =============================
+// TAKE PHOTO
+// =============================
+function takePhoto() {
+    const video = preview;
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1920;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+        const url = URL.createObjectURL(blob);
+        downloadFile(url, "photo.jpg");
+    }, "image/jpeg", 0.95);
+}
+
+// =============================
+// START RECORDING
+// =============================
+function startRecord() {
+    chunks = [];
+    mediaRecorder = new MediaRecorder(mediaStream, {
+        mimeType: "video/mp4"   // iPhone & Android support mp4
+    });
+
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+
+    mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: "video/mp4" });
+        const url = URL.createObjectURL(blob);
+        downloadFile(url, "video.mp4");
+    };
+
+    mediaRecorder.start();
+    isRecording = true;
+}
+
+// =============================
+// STOP RECORDING
+// =============================
+function stopRecord() {
+    if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+    }
+}
+
+// =============================
+// DOWNLOAD FILE
+// =============================
+function downloadFile(url, filename) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+// =============================
+// BUTTON HANDLER
+// =============================
+
+// PRESS = PHOTO
+// HOLD = RECORD
+captureBtn.addEventListener("touchstart", startPress);
+captureBtn.addEventListener("mousedown", startPress);
+
+captureBtn.addEventListener("touchend", endPress);
+captureBtn.addEventListener("mouseup", endPress);
+captureBtn.addEventListener("mouseleave", endPress);
+
+function startPress() {
+    pressTimer = setTimeout(() => {
+        startRecord();
+    }, 300); // tahan 0.3 detik = mulai rekam
+}
+
+function endPress() {
+    clearTimeout(pressTimer);
+
+    if (isRecording) {
+        stopRecord(); // stop video
+    } else {
+        takePhoto(); // klik cepat = foto
+    }
+}
 </script>
 
 </body>
