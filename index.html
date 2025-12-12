@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Frame Camera Full HD</title>
+<title>Camera Frame HD Portrait</title>
 
 <style>
     body, html {
@@ -13,37 +13,19 @@
         font-family: Arial, sans-serif;
     }
 
-    #container {
-        position: relative;
-        width: 100vw;
-        height: 100vh;
-        overflow: hidden;
+    #previewCanvas {
+        position: fixed;
+        top:0;
+        left:0;
+        width:100vw;
+        height:100vh;
+        object-fit: cover;
         background:#000;
     }
 
-    video {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 100vw;
-        height: 100vh;
-        object-fit: cover;
-    }
-
-    #frame {
-        position: absolute;
-        top:0;
-        left:0;
-        width:100%;
-        height:100%;
-        pointer-events:none;
-        object-fit: contain;
-    }
-
     #controls {
-        position: absolute;
-        bottom: 20px;
+        position: fixed;
+        bottom: 25px;
         width: 100%;
         text-align: center;
         z-index: 10;
@@ -51,90 +33,146 @@
 
     button {
         background: white;
-        padding: 15px 25px;
+        padding: 12px 25px;
         border-radius: 12px;
         border: none;
-        font-size: 18px;
+        font-size: 17px;
         margin: 5px;
+    }
+
+    #timer {
+        position: fixed;
+        top: 25px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: white;
+        font-size: 22px;
+        font-weight: bold;
+        display:none;
+        z-index: 20;
     }
 </style>
 </head>
 
 <body>
 
-<div id="container">
-    <video id="video" autoplay playsinline></video>
-    <img id="frame" src="frame.png">
-</div>
+<canvas id="previewCanvas"></canvas>
+
+<div id="timer">00:00</div>
 
 <div id="controls">
-    <button id="captureBtn">Foto</button>
+    <button id="switchBtn">Switch</button>
+    <button id="photoBtn">Foto</button>
     <button id="recordBtn">Rekam</button>
 </div>
 
 <script>
-let video = document.getElementById("video");
-let captureBtn = document.getElementById("captureBtn");
+let previewCanvas = document.getElementById("previewCanvas");
+let ctx = previewCanvas.getContext("2d");
+
+let switchBtn = document.getElementById("switchBtn");
+let photoBtn = document.getElementById("photoBtn");
 let recordBtn = document.getElementById("recordBtn");
-let recorder, recordedChunks = [];
+
+let timer = document.getElementById("timer");
+
+let stream;
+let video = document.createElement("video");
+video.setAttribute("playsinline", true);
+
+let facing = "environment";
 let isRecording = false;
+let recorder;
+let recordedChunks = [];
+let frameImg = new Image();
+frameImg.src = "snapgram.png";
+
+let drawLoop;
 
 // ===============================
-// START CAMERA BACK
+// START CAMERA
 // ===============================
 async function startCamera() {
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                width: { ideal: 1080 },
-                height: { ideal: 1920 },
-                facingMode: { exact: "environment" }
-            },
-            audio: true
-        });
+    if (stream) stream.getTracks().forEach(t => t.stop());
 
-        video.srcObject = stream;
+    stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: facing,
+            width: { ideal: 1080 },
+            height: { ideal: 1920 }
+        },
+        audio: true
+    });
 
-    } catch (err) {
-        console.warn("Back camera gagal, coba kamera default");
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true
-        });
-        video.srcObject = stream;
-    }
+    video.srcObject = stream;
+    await video.play();
+
+    startPreviewLoop();
 }
-startCamera();
+
+function startPreviewLoop() {
+    previewCanvas.width = 1080;
+    previewCanvas.height = 1920;
+
+    function draw() {
+        ctx.drawImage(video, 0, 0, 1080, 1920);
+        ctx.drawImage(frameImg, 0, 0, 1080, 1920);
+        drawLoop = requestAnimationFrame(draw);
+    }
+    draw();
+}
+
+switchBtn.onclick = () => {
+    facing = (facing === "environment") ? "user" : "environment";
+    startCamera();
+};
 
 // ===============================
-// FOTO FULL HD + FRAME
+// FOTO FULL HD
 // ===============================
-captureBtn.onclick = function () {
+photoBtn.onclick = () => {
     let canvas = document.createElement("canvas");
     canvas.width = 1080;
     canvas.height = 1920;
-    let ctx = canvas.getContext("2d");
+    let c = canvas.getContext("2d");
 
-    // Gambar video
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // Gambar frame PNG
-    let frame = document.getElementById("frame");
-    ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+    c.drawImage(video, 0, 0, 1080, 1920);
+    c.drawImage(frameImg, 0, 0, 1080, 1920);
 
     let url = canvas.toDataURL("image/png");
     download(url, "foto.png");
 };
 
 // ===============================
-// VIDEO WEBM + FRAME
+// TIMER
 // ===============================
-recordBtn.onclick = function () {
-    if (!isRecording) {
-        startRecording();
-    } else {
-        stopRecording();
-    }
+let timeInterval;
+let sec = 0;
+
+function startTimer() {
+    sec = 0;
+    timer.style.display = "block";
+    timer.innerText = "00:00";
+
+    timeInterval = setInterval(() => {
+        sec++;
+        let m = String(Math.floor(sec / 60)).padStart(2, "0");
+        let s = String(sec % 60).padStart(2, "0");
+        timer.innerText = `${m}:${s}`;
+    }, 1000);
+}
+
+function stopTimer() {
+    clearInterval(timeInterval);
+    timer.style.display = "none";
+}
+
+// ===============================
+// VIDEO RECORD (CANVAS)
+// ===============================
+recordBtn.onclick = () => {
+    if (!isRecording) startRecording();
+    else stopRecording();
 };
 
 function startRecording() {
@@ -143,37 +181,42 @@ function startRecording() {
 
     recordedChunks = [];
 
-    let stream = video.srcObject;
+    let canvasStream = previewCanvas.captureStream(30);
 
-    recorder = new MediaRecorder(stream, {
+    recorder = new MediaRecorder(canvasStream, {
         mimeType: "video/webm; codecs=vp9",
-        videoBitsPerSecond: 8000000 // kualitas tinggi
+        videoBitsPerSecond: 8000000
     });
 
     recorder.ondataavailable = e => recordedChunks.push(e.data);
 
-    recorder.onstop = async () => {
+    recorder.onstop = () => {
         let blob = new Blob(recordedChunks, { type: "video/webm" });
-
-        let url = URL.createObjectURL(blob);
-        download(url, "video.webm");
+        download(URL.createObjectURL(blob), "video.webm");
     };
 
+    startTimer();
     recorder.start();
 }
 
 function stopRecording() {
     isRecording = false;
     recordBtn.innerText = "Rekam";
+    stopTimer();
     recorder.stop();
 }
 
-function download(url, filename) {
+// ===============================
+// DOWNLOAD FUNCTION
+// ===============================
+function download(url, file) {
     let a = document.createElement("a");
     a.href = url;
-    a.download = filename;
+    a.download = file;
     a.click();
 }
+
+startCamera();
 </script>
 
 </body>
