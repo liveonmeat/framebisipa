@@ -2,52 +2,85 @@
 <html lang="id">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WebAR Frame</title>
+<title>WebAR – IG Camera Style</title>
 
 <style>
     body, html {
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background: #000;
+        margin:0;
+        padding:0;
+        overflow:hidden;
+        background:#000;
+        font-family: Arial, sans-serif;
     }
+
     video, canvas {
         position: fixed;
-        top: 0; left: 0;
-        width: 100vw;
-        height: 100vh;
-        object-fit: cover;
+        top:0; left:0;
+        width:100vw;
+        height:100vh;
+        object-fit:cover;
     }
 
     #frame {
         position: fixed;
-        top: 0; left: 0;
-        width: 100vw;
-        height: 100vh;
-        object-fit: cover;
-        pointer-events: none;
+        top:0; left:0;
+        width:100vw;
+        height:100vh;
+        object-fit:cover;
+        pointer-events:none;
     }
 
-    .btn {
+    /* TOMBOL SHUTTER - INSTAGRAM STYLE */
+    #captureBtn {
         position: fixed;
-        bottom: 20px;
+        bottom: 35px;
         left: 50%;
         transform: translateX(-50%);
-        width: 80px;
-        height: 80px;
+        width: 85px;
+        height: 85px;
         border-radius: 50%;
-        background: white;
-        border: 5px solid #ddd;
+        background: rgba(255,255,255,0.9);
+        border: 6px solid rgba(255,255,255,0.7);
+        box-shadow: 0 0 10px rgba(0,0,0,0.3);
+        transition: transform 0.1s ease;
     }
 
-    #switchCamBtn {
+    #captureBtn:active {
+        transform: translateX(-50%) scale(0.9);
+    }
+
+    /* FLIP CAMERA */
+    #flipBtn {
         position: fixed;
-        top: 20px; 
+        top: 25px;
         right: 20px;
-        padding: 10px 20px;
-        background: rgba(255,255,255,0.7);
-        border-radius: 10px;
+        background: rgba(0,0,0,0.5);
+        padding: 10px 16px;
+        border-radius: 25px;
+        color: white;
         font-weight: bold;
+        border: 1px solid rgba(255,255,255,0.4);
+        backdrop-filter: blur(3px);
+    }
+
+    /* PROGRESS RING */
+    #progressRing {
+        position: fixed;
+        bottom: 27px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 100px;
+        height: 100px;
+        border-radius: 50%;
+        border: 6px solid rgba(255,255,255,0.4);
+        border-top-color: #ff3333;
+        display: none;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        0% { transform: translateX(-50%) rotate(0deg); }
+        100% { transform: translateX(-50%) rotate(360deg); }
     }
 </style>
 </head>
@@ -56,49 +89,42 @@
 
 <video id="video" autoplay playsinline muted></video>
 <canvas id="canvas"></canvas>
-
-<!-- FRAME PNG FULLSCREEN -->
 <img id="frame" src="frame.png">
 
-<button id="captureBtn" class="btn"></button>
-<button id="switchCamBtn">Flip</button>
+<button id="captureBtn"></button>
+<div id="progressRing"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.2/dist/ffmpeg.min.js"></script>
+<button id="flipBtn">Flip</button>
+
+<!-- MP4 ENCODER -->
+<script src="https://cdn.jsdelivr.net/npm/mp4-muxer@2.0.0/dist/mp4-muxer.js"></script>
 
 <script>
 let stream;
 let usingFront = true;
 let isRecording = false;
-let recorder;
-let chunks = [];
-let pressTimer;
-let longPress = false;
+let muxer;
+let drawLoop;
 
-// ========= START CAMERA ===========
+// ================= CAMERA INIT ===================
 async function startCamera() {
     if (stream) stream.getTracks().forEach(t => t.stop());
 
     stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-            facingMode: usingFront ? "user" : "environment",
-            width: { ideal: 1920 },
-            height: { ideal: 1080 }
-        },
-        audio: false // jangan rekam audio dulu
+        video: { facingMode: usingFront ? "user" : "environment" },
+        audio: false
     });
 
     document.getElementById("video").srcObject = stream;
 }
-
 startCamera();
 
-// ========= SWITCH CAMERA ===========
-document.getElementById("switchCamBtn").onclick = () => {
+document.getElementById("flipBtn").onclick = () => {
     usingFront = !usingFront;
     startCamera();
 };
 
-// ========== FOTO ============
+// ================= TAKE PHOTO ====================
 function takePhoto() {
     const video = document.getElementById("video");
     const canvas = document.getElementById("canvas");
@@ -116,70 +142,77 @@ function takePhoto() {
         a.href = URL.createObjectURL(blob);
         a.download = "photo.png";
         a.click();
+
+        // FIX Freeze Camera
+        video.srcObject = null;
+        video.srcObject = stream;
+        video.play();
     }, "image/png");
 }
 
-// ========== VIDEO ==============
-async function startRecording() {
+// ================= VIDEO RECORD ====================
+function startRecording() {
     isRecording = true;
 
-    // Rekam video TANPA audio dulu
-    const videoTrack = stream.getVideoTracks()[0];
-    const videoStream = new MediaStream([videoTrack]);
+    const video = document.getElementById("video");
+    const frame = document.getElementById("frame");
+    const canvas = document.getElementById("canvas");
 
-    recorder = new MediaRecorder(videoStream, {
-        mimeType: "video/webm; codecs=vp9"
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext("2d");
+
+    muxer = new MP4.Muxer({
+        target: new MP4.ArrayBufferTarget(),
+        video: { codec: "avc", width: canvas.width, height: canvas.height }
     });
 
-    chunks = [];
-    recorder.ondataavailable = e => chunks.push(e.data);
+    function draw() {
+        if (!isRecording) return;
 
-    recorder.onstop = async () => {
-        const webmBlob = new Blob(chunks, { type: "video/webm" });
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
 
-        // KONVERSI KE MP4 PAKAI FFMPEG
-        await convertToMP4(webmBlob);
-    };
+        const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        muxer.addVideoFrame(frameData);
 
-    recorder.start();
+        drawLoop = requestAnimationFrame(draw);
+    }
+    draw();
 }
 
 function stopRecording() {
-    if (recorder && recorder.state !== "inactive") {
-        recorder.stop();
-    }
     isRecording = false;
-}
+    cancelAnimationFrame(drawLoop);
 
-// ==================== KONVERSI WEBM -> MP4 ====================
-async function convertToMP4(webmBlob) {
-    const ffmpeg = FFmpeg.createFFmpeg({ log: false });
-    await ffmpeg.load();
+    muxer.finalize();
+    const buffer = muxer.target.buffer;
 
-    const data = new Uint8Array(await webmBlob.arrayBuffer());
-    ffmpeg.FS("writeFile", "input.webm", data);
-
-    await ffmpeg.run("-i", "input.webm", "-c:v", "copy", "output.mp4");
-
-    const mp4Data = ffmpeg.FS("readFile", "output.mp4");
-
-    const mp4Blob = new Blob([mp4Data.buffer], { type: "video/mp4" });
+    const blob = new Blob([buffer], { type: "video/mp4" });
 
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(mp4Blob);
+    a.href = URL.createObjectURL(blob);
     a.download = "video.mp4";
     a.click();
+
+    document.getElementById("progressRing").style.display = "none";
 }
 
-// ========== TOMBOL TEKAN ≠ TEKAN LAMA ==========
+// ================= BUTTON IG STYLE ====================
 const btn = document.getElementById("captureBtn");
+const ring = document.getElementById("progressRing");
+
+let pressTimer;
+let longPress = false;
 
 btn.addEventListener("mousedown", () => {
     longPress = false;
     pressTimer = setTimeout(() => {
         longPress = true;
+        ring.style.display = "block";
         startRecording();
-    }, 350); // >350ms dianggap rekam video
+    }, 350);
 });
 
 btn.addEventListener("mouseup", () => {
@@ -199,3 +232,4 @@ btn.addEventListener("mouseleave", () => {
 
 </body>
 </html>
+
