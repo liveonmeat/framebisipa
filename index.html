@@ -34,7 +34,7 @@
     z-index: 2;
   }
 
-  /* Tombol switch kamera */
+  /* tombol flip kamera */
   #switchBtn {
     position: fixed;
     top: 30px;
@@ -48,7 +48,7 @@
     font-size: 18px;
   }
 
-  /* Tombol capture + animasi */
+  /* tombol kamera dengan animasi */
   #captureBtn {
     position: fixed;
     bottom: 40px;
@@ -71,7 +71,7 @@
     width: 70px;
     height: 70px;
     border-radius: 50%;
-    background: white;
+    background: black;
     position: relative;
     overflow: hidden;
   }
@@ -80,7 +80,7 @@
     transform: translateX(-50%) scale(0.9);
   }
 
-  /* garis progres berputar saat rekam */
+  /* garis progress saat rekam */
   #captureBtn.recording .ring::before {
     content: "";
     position: absolute;
@@ -92,7 +92,7 @@
     animation: spin 1s linear infinite;
   }
 
-  /* Timer rekam */
+  /* timer 00:15 */
   #recordTimer {
     position: fixed;
     top: 30px;
@@ -107,7 +107,6 @@
     text-align: center;
   }
 
-  /* Fallback input (kamera bawaan HP) */
   #fallbackInput {
     display: none;
   }
@@ -150,7 +149,6 @@
        type="file"
        accept="image/*,video/*"
        capture="environment">
-
 <div id="fallbackNotice"></div>
 
 <script>
@@ -171,30 +169,24 @@ let currentFacing = "user";
 let recordInterval = null;
 const MAX_DURATION = 15; // detik
 
-// SET FRAME (pastikan file ada)
+// ganti dengan nama frame kamu
 frame.style.backgroundImage = "url('frame.png')";
 
-// =============================
-// FEATURE DETECTION
-// =============================
+/* ====== DETEKSI FITUR ====== */
 function hasGetUserMedia() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
-
 function hasMediaRecorder() {
   return typeof MediaRecorder !== "undefined";
 }
 
-// =============================
-// MULAI KAMERA
-// =============================
+/* ====== START CAMERA ====== */
 async function startCamera() {
   if (!hasGetUserMedia()) {
     enableFallback("Browser tidak mendukung kamera lewat web.");
     return;
   }
 
-  // stop stream lama jika ada
   if (mediaStream) {
     mediaStream.getTracks().forEach(t => t.stop());
     mediaStream = null;
@@ -202,7 +194,7 @@ async function startCamera() {
 
   const constraints = {
     video: {
-      facingMode: currentFacing, // "user" atau "environment"
+      facingMode: currentFacing,
       width:  { ideal: 1080 },
       height: { ideal: 1920 },
       frameRate: { ideal: 30, max: 30 }
@@ -215,7 +207,7 @@ async function startCamera() {
     preview.srcObject = mediaStream;
   } catch (err) {
     console.error("getUserMedia error:", err);
-    enableFallback("Gagal akses kamera/mikrofon. Pakai kamera HP.");
+    enableFallback("Gagal akses kamera/mikrofon.");
   }
 
   if (!hasMediaRecorder()) {
@@ -223,22 +215,18 @@ async function startCamera() {
   }
 }
 
-// switch kamera depan/belakang
+/* tombol flip kamera */
 switchBtn.addEventListener("click", () => {
   currentFacing = currentFacing === "user" ? "environment" : "user";
   startCamera();
 });
 
-// =============================
-// FALLBACK KAMERA HP
-// =============================
-function enableFallback(message) {
+/* ====== FALLBACK ====== */
+function enableFallback(msg) {
   fallbackInput.style.display = "block";
-  fallbackNote.textContent = message || "Gunakan kamera HP untuk foto/video.";
+  fallbackNote.textContent = msg || "Gunakan kamera HP.";
 
-  captureBtn.onclick = () => {
-    fallbackInput.click();
-  };
+  captureBtn.onclick = () => fallbackInput.click();
 
   fallbackInput.onchange = (e) => {
     const file = e.target.files[0];
@@ -247,9 +235,7 @@ function enableFallback(message) {
   };
 }
 
-// =============================
-// FOTO
-// =============================
+/* ====== FOTO ====== */
 function takePhoto() {
   if (!mediaStream || !preview.videoWidth || !preview.videoHeight) {
     if (fallbackInput.style.display === "block") {
@@ -273,18 +259,10 @@ function takePhoto() {
   }, "image/jpeg", 0.95);
 }
 
-// =============================
-// MIME TYPE
-// =============================
+/* ====== MIME TYPE ====== */
 function getSupportedMimeType() {
   if (!hasMediaRecorder()) return "";
-
-  const types = [
-    "video/mp4",
-    "video/webm;codecs=vp8,opus",
-    "video/webm"
-  ];
-
+  const types = ["video/mp4","video/webm;codecs=vp8,opus","video/webm"];
   for (const t of types) {
     if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
       return t;
@@ -293,9 +271,7 @@ function getSupportedMimeType() {
   return "";
 }
 
-// =============================
-// REKAM VIDEO (15 DETIK MAX)
-// =============================
+/* ====== REKAM 15 DETIK ====== */
 function startRecord() {
   if (!mediaStream || !hasMediaRecorder()) {
     if (fallbackInput.style.display === "block") {
@@ -307,7 +283,6 @@ function startRecord() {
   }
 
   chunks = [];
-
   const mimeType = getSupportedMimeType();
   const options = mimeType ? { mimeType } : {};
 
@@ -319,14 +294,12 @@ function startRecord() {
       fallbackInput.click();
       return;
     }
-    alert("Format rekam tidak didukung di HP ini.");
+    alert("Format rekam tidak didukung.");
     return;
   }
 
   mediaRecorder.ondataavailable = (e) => {
-    if (e.data && e.data.size > 0) {
-      chunks.push(e.data);
-    }
+    if (e.data && e.data.size > 0) chunks.push(e.data);
   };
 
   mediaRecorder.onerror = (e) => {
@@ -340,13 +313,10 @@ function startRecord() {
     clearInterval(recordInterval);
     updateTimer(0);
 
-    if (!chunks.length) {
-      return;
-    }
+    if (!chunks.length) return;
 
     const usedType = mediaRecorder.mimeType || mimeType || "video/webm";
     const blob = new Blob(chunks, { type: usedType });
-
     let ext = "webm";
     if (usedType.includes("mp4")) ext = "mp4";
 
@@ -381,9 +351,7 @@ function updateTimer(sec) {
   timerLabel.textContent = `00:${s}`;
 }
 
-// =============================
-// DOWNLOAD
-// =============================
+/* ====== DOWNLOAD ====== */
 function downloadFile(url, filename) {
   const a = document.createElement("a");
   a.href = url;
@@ -394,9 +362,7 @@ function downloadFile(url, filename) {
   URL.revokeObjectURL(url);
 }
 
-// =============================
-// TEKAN / TAHAN TOMBOL
-// =============================
+/* ====== TEKAN / TAHAN TOMBOL ====== */
 function startPress(e) {
   e.preventDefault();
   pressTimer = setTimeout(() => {
@@ -422,9 +388,7 @@ captureBtn.addEventListener("touchend", endPress);
 captureBtn.addEventListener("mouseup", endPress);
 captureBtn.addEventListener("mouseleave", endPress);
 
-// =============================
-// INIT
-// =============================
+/* ====== INIT ====== */
 startCamera();
 updateTimer(0);
 </script>
