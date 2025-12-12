@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebAR Frame</title>
+
+<style>
+    body, html {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+    }
+    video, canvas {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+    }
+
+    #frame {
+        position: fixed;
+        top: 0; left: 0;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+        pointer-events: none;
+    }
+
+    .btn {
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: white;
+        border: 5px solid #ddd;
+    }
+
+    #switchCamBtn {
+        position: fixed;
+        top: 20px; 
+        right: 20px;
+        padding: 10px 20px;
+        background: rgba(255,255,255,0.7);
+        border-radius: 10px;
+        font-weight: bold;
+    }
+</style>
+</head>
+
+<body>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<!-- FRAME PNG FULLSCREEN -->
+<img id="frame" src="frame.png">
+
+<button id="captureBtn" class="btn"></button>
+<button id="switchCamBtn">Flip</button>
+
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.2/dist/ffmpeg.min.js"></script>
+
+<script>
+let stream;
+let usingFront = true;
+let isRecording = false;
+let recorder;
+let chunks = [];
+let pressTimer;
+let longPress = false;
+
+// ========= START CAMERA ===========
+async function startCamera() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+
+    stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: usingFront ? "user" : "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+        },
+        audio: false // jangan rekam audio dulu
+    });
+
+    document.getElementById("video").srcObject = stream;
+}
+
+startCamera();
+
+// ========= SWITCH CAMERA ===========
+document.getElementById("switchCamBtn").onclick = () => {
+    usingFront = !usingFront;
+    startCamera();
+};
+
+// ========== FOTO ============
+function takePhoto() {
+    const video = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const frame = document.getElementById("frame");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob(blob => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "photo.png";
+        a.click();
+    }, "image/png");
+}
+
+// ========== VIDEO ==============
+async function startRecording() {
+    isRecording = true;
+
+    // Rekam video TANPA audio dulu
+    const videoTrack = stream.getVideoTracks()[0];
+    const videoStream = new MediaStream([videoTrack]);
+
+    recorder = new MediaRecorder(videoStream, {
+        mimeType: "video/webm; codecs=vp9"
+    });
+
+    chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+
+    recorder.onstop = async () => {
+        const webmBlob = new Blob(chunks, { type: "video/webm" });
+
+        // KONVERSI KE MP4 PAKAI FFMPEG
+        await convertToMP4(webmBlob);
+    };
+
+    recorder.start();
+}
+
+function stopRecording() {
+    if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+    }
+    isRecording = false;
+}
+
+// ==================== KONVERSI WEBM -> MP4 ====================
+async function convertToMP4(webmBlob) {
+    const ffmpeg = FFmpeg.createFFmpeg({ log: false });
+    await ffmpeg.load();
+
+    const data = new Uint8Array(await webmBlob.arrayBuffer());
+    ffmpeg.FS("writeFile", "input.webm", data);
+
+    await ffmpeg.run("-i", "input.webm", "-c:v", "copy", "output.mp4");
+
+    const mp4Data = ffmpeg.FS("readFile", "output.mp4");
+
+    const mp4Blob = new Blob([mp4Data.buffer], { type: "video/mp4" });
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(mp4Blob);
+    a.download = "video.mp4";
+    a.click();
+}
+
+// ========== TOMBOL TEKAN ≠ TEKAN LAMA ==========
+const btn = document.getElementById("captureBtn");
+
+btn.addEventListener("mousedown", () => {
+    longPress = false;
+    pressTimer = setTimeout(() => {
+        longPress = true;
+        startRecording();
+    }, 350); // >350ms dianggap rekam video
+});
+
+btn.addEventListener("mouseup", () => {
+    clearTimeout(pressTimer);
+
+    if (!longPress) {
+        takePhoto();
+    } else {
+        stopRecording();
+    }
+});
+
+btn.addEventListener("mouseleave", () => {
+    clearTimeout(pressTimer);
+});
+</script>
+
+</body>
+</html>
