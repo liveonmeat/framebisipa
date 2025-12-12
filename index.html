@@ -20,6 +20,7 @@
         height: 100%;
         object-fit: cover;
         background: #000;
+        z-index: 1;
     }
 
     #frame {
@@ -30,6 +31,7 @@
         background-size: cover;
         background-position: center;
         background-repeat: no-repeat;
+        z-index: 2;
     }
 
     #captureBtn {
@@ -42,6 +44,7 @@
         background: white;
         border: 4px solid #ddd;
         box-shadow: 0 0 5px #000;
+        z-index: 3;
     }
 
     #captureBtn:active {
@@ -68,23 +71,28 @@ let chunks = [];
 let isRecording = false;
 let pressTimer;
 
-// SET FRAME (KALAU ADA GAMBAR OVERLAY)
-// frame.style.backgroundImage = "url(frame.png)"; // opsional
+// SET FRAME (PASTIKAN frame.png ADA DI FOLDER YANG SAMA)
+frame.style.backgroundImage = "url('frame.png')";
 
 // =============================
 // START CAMERA
 // =============================
 async function startCamera() {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-            facingMode: "user",
-            width: { ideal: 1080 },
-            height: { ideal: 1920 }
-        },
-        audio: true
-    });
+    try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                facingMode: "user",
+                width: { ideal: 1080 },
+                height: { ideal: 1920 }
+            },
+            audio: true
+        });
 
-    preview.srcObject = mediaStream;
+        preview.srcObject = mediaStream;
+    } catch (err) {
+        console.error("Tidak bisa akses kamera/mic:", err);
+        alert("Gagal akses kamera/mikrofon. Cek izin browser.");
+    }
 }
 
 startCamera();
@@ -93,13 +101,22 @@ startCamera();
 // TAKE PHOTO
 // =============================
 function takePhoto() {
-    const video = preview;
+    if (!preview.videoWidth || !preview.videoHeight) {
+        alert("Video belum siap. Coba lagi sebentar.");
+        return;
+    }
+
     const canvas = document.createElement("canvas");
     canvas.width = 1080;
     canvas.height = 1920;
 
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Gambar video
+    ctx.drawImage(preview, 0, 0, canvas.width, canvas.height);
+
+    // (Opsional) gambar frame ke foto juga:
+    // Jika ingin overlay ikut tersimpan di foto, load image frame.png di sini.
 
     canvas.toBlob((blob) => {
         const url = URL.createObjectURL(blob);
@@ -108,20 +125,64 @@ function takePhoto() {
 }
 
 // =============================
+// PILIH MIME TYPE YANG DIDUKUNG
+// =============================
+function getSupportedMimeType() {
+    const types = [
+        "video/mp4",
+        "video/webm;codecs=vp9",
+        "video/webm;codecs=vp8",
+        "video/webm"
+    ];
+
+    for (const type of types) {
+        if (MediaRecorder.isTypeSupported(type)) {
+            return type;
+        }
+    }
+    return ""; // biar MediaRecorder pakai default
+}
+
+// =============================
 // START RECORDING
 // =============================
 function startRecord() {
-    chunks = [];
-    mediaRecorder = new MediaRecorder(mediaStream, {
-        mimeType: "video/mp4"   // iPhone & Android support mp4
-    });
+    if (!mediaStream) {
+        alert("Kamera belum aktif.");
+        return;
+    }
 
-    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    chunks = [];
+
+    const mimeType = getSupportedMimeType();
+    const options = {};
+    if (mimeType) {
+        options.mimeType = mimeType;
+    }
+
+    try {
+        mediaRecorder = new MediaRecorder(mediaStream, options);
+    } catch (e) {
+        console.error("Gagal membuat MediaRecorder:", e);
+        alert("Device/browser tidak mendukung perekaman video.");
+        return;
+    }
+
+    mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+            chunks.push(e.data);
+        }
+    };
 
     mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: "video/mp4" });
+        const usedType = mediaRecorder.mimeType || mimeType || "video/webm";
+        const blob = new Blob(chunks, { type: usedType });
+
+        let ext = "webm";
+        if (usedType.includes("mp4")) ext = "mp4";
+
         const url = URL.createObjectURL(blob);
-        downloadFile(url, "video.mp4");
+        downloadFile(url, `video.${ext}`);
     };
 
     mediaRecorder.start();
@@ -145,7 +206,9 @@ function downloadFile(url, filename) {
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
 }
 
@@ -162,13 +225,15 @@ captureBtn.addEventListener("touchend", endPress);
 captureBtn.addEventListener("mouseup", endPress);
 captureBtn.addEventListener("mouseleave", endPress);
 
-function startPress() {
+function startPress(e) {
+    e.preventDefault();
     pressTimer = setTimeout(() => {
         startRecord();
     }, 300); // tahan 0.3 detik = mulai rekam
 }
 
-function endPress() {
+function endPress(e) {
+    e.preventDefault();
     clearTimeout(pressTimer);
 
     if (isRecording) {
